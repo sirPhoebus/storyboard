@@ -3,6 +3,7 @@ import Canvas from './components/Canvas'
 import Sidebar from './components/Sidebar'
 import { API_BASE_URL } from './config'
 import type { Chapter, Page } from './types'
+import { useSocket } from './hooks/useSocket'
 
 
 /* ... imports */
@@ -13,6 +14,8 @@ function App() {
   const [currentPageId, setCurrentPageId] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(260);
+  const [connectedUsers, setConnectedUsers] = useState(1);
+  const socket = useSocket();
 
   const pages = allPages.filter(p => p.chapter_id === currentChapterId);
 
@@ -61,6 +64,17 @@ function App() {
     fetchChapters();
     fetchPages(); // Fetch all initially
   }, []);
+
+  useEffect(() => {
+    if (socket) {
+      socket.on('user_count', (count: number) => {
+        setConnectedUsers(count);
+      });
+      return () => {
+        socket.off('user_count');
+      };
+    }
+  }, [socket]);
 
   useEffect(() => {
     if (currentChapterId && allPages.length > 0) {
@@ -190,6 +204,7 @@ function App() {
         onRefresh={fetchPages}
         width={sidebarWidth}
         onWidthChange={setSidebarWidth}
+        connectedUsers={connectedUsers}
       />
       <Canvas
         pageId={currentPageId}
@@ -199,6 +214,7 @@ function App() {
         allPages={allPages}
         onRefreshPages={fetchPages}
         onSelectPage={handlePageSelection}
+        socket={socket}
       />
     </div>
   )

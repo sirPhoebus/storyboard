@@ -1,10 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Stage, Layer, Rect, Text, Arrow, Circle, Transformer, Line as KonvaLine } from 'react-konva';
-import { useSocket } from '../hooks/useSocket';
 import MultimediaElement from './MultimediaElement';
 import { API_BASE_URL } from '../config';
-
-
 import type { Element, Chapter, Page } from '../types';
 
 interface CanvasProps {
@@ -15,10 +12,10 @@ interface CanvasProps {
     allPages: Page[];
     onRefreshPages: () => void;
     onSelectPage: (id: string) => void;
+    socket: any;
 }
 
-const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidth, chapters, allPages, onRefreshPages, onSelectPage }) => {
-    const socket = useSocket();
+const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidth, chapters, allPages, onRefreshPages, onSelectPage, socket }) => {
 
     const mainButtonStyle = {
         padding: '8px 12px',

@@ -22,11 +22,12 @@ interface SidebarProps {
     onRefresh?: () => void;
     width: number;
     onWidthChange: (width: number) => void;
+    connectedUsers?: number;
 }
 const Sidebar: React.FC<SidebarProps> = ({
     chapters, currentChapterId, onSelectChapter, onAddChapter, onDeleteChapter, onRenameChapter,
     pages, currentPageId, onSelectPage, onAddPage, onRenamePage, isCollapsed, onToggle, onRefresh,
-    width, onWidthChange
+    width, onWidthChange, connectedUsers = 1
 }) => {
     const [isResizing, setIsResizing] = React.useState(false);
 
@@ -223,13 +224,43 @@ const Sidebar: React.FC<SidebarProps> = ({
             }}>
                 <Clapperboard size={24} color="var(--accent-color)" />
                 {!isCollapsed && (
-                    <h1 style={{
-                        margin: 0,
-                        fontSize: '18px',
-                        fontWeight: 700,
-                        letterSpacing: '-0.02em',
-                        color: 'white'
-                    }}>Storyboard</h1>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <h1 style={{
+                            margin: 0,
+                            fontSize: '18px',
+                            fontWeight: 700,
+                            letterSpacing: '-0.02em',
+                            color: 'white'
+                        }}>Storyboard</h1>
+                        <div style={{
+                            padding: '2px 6px',
+                            background: 'rgba(52, 152, 219, 0.2)',
+                            borderRadius: '10px',
+                            fontSize: '10px',
+                            color: 'var(--accent-color)',
+                            fontWeight: 600,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            border: '1px solid rgba(52, 152, 219, 0.3)'
+                        }}>
+                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#2ecc71' }}></span>
+                            {connectedUsers}
+                        </div>
+                    </div>
+                )}
+                {isCollapsed && (
+                    <div style={{
+                        position: 'absolute',
+                        top: '10px',
+                        left: '50%',
+                        transform: 'translateX(-50%)',
+                        fontSize: '10px',
+                        color: '#2ecc71',
+                        fontWeight: 'bold'
+                    }}>
+                        {connectedUsers}
+                    </div>
                 )}
             </div>
 
