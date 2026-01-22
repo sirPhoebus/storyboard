@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, forwardRef } from 'react';
+import { useEffect, useRef, useState, forwardRef } from 'react';
 import { Image as KonvaImage } from 'react-konva';
 import useImage from 'use-image';
 
