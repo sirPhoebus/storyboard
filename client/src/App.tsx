@@ -4,6 +4,8 @@ import Sidebar from './components/Sidebar'
 import { API_BASE_URL } from './config'
 import type { Chapter, Page } from './types'
 import { useSocket } from './hooks/useSocket'
+import HelpManual from './components/HelpManual'
+import { HelpCircle, Download } from 'lucide-react'
 
 
 /* ... imports */
@@ -15,6 +17,7 @@ function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [connectedUsers, setConnectedUsers] = useState(1);
+  const [isManualOpen, setIsManualOpen] = useState(false);
   const socket = useSocket();
 
   const pages = allPages.filter(p => p.chapter_id === currentChapterId);
@@ -185,6 +188,24 @@ function App() {
       });
   };
 
+  const handleExport = () => {
+    const state = {
+      chapters,
+      pages: allPages,
+      exportedAt: new Date().toISOString(),
+      version: '1.0'
+    };
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `storyboard-export-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="App" style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden' }}>
       <Sidebar
@@ -215,6 +236,73 @@ function App() {
         onSelectPage={handlePageSelection}
         socket={socket}
       />
+
+      {/* Floating Action Buttons */}
+      <div style={{
+        position: 'fixed',
+        top: '20px',
+        left: isSidebarCollapsed ? '86px' : `${sidebarWidth + 20}px`,
+        display: 'flex',
+        flexDirection: 'row',
+        gap: '12px',
+        zIndex: 100,
+        transition: 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
+      }}>
+        <button
+          onClick={handleExport}
+          style={{
+            background: 'rgba(30,30,30,0.8)',
+            backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: '12px',
+            padding: '10px 16px',
+            color: 'white',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            fontSize: '14px',
+            fontWeight: 500,
+            transition: 'all 0.2s',
+            boxShadow: '0 4px 15px rgba(0,0,0,0.3)'
+          }}
+          className="hover-lift"
+        >
+          <Download size={18} />
+          Export
+        </button>
+        <button
+          onClick={() => setIsManualOpen(true)}
+          style={{
+            background: 'rgba(30,30,30,0.8)',
+            backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            borderRadius: '12px',
+            width: '42px',
+            height: '42px',
+            color: 'white',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            transition: 'all 0.2s',
+            boxShadow: '0 4px 15px rgba(0,0,0,0.3)'
+          }}
+          className="hover-lift"
+        >
+          <HelpCircle size={24} />
+        </button>
+      </div>
+
+      <HelpManual isOpen={isManualOpen} onClose={() => setIsManualOpen(false)} />
+
+      <style>{`
+        .hover-lift:hover {
+          transform: translateY(-2px);
+          background: rgba(52, 152, 219, 0.2) !important;
+          border-color: #3498db !important;
+        }
+      `}</style>
     </div>
   )
 }

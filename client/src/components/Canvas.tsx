@@ -128,7 +128,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 return prev.map((el: Element) => {
                     if (el.id === data.id) {
                         // Merge content if present, plus any top-level fields
-                        const { id, content, ...otherFields } = data;
+                        const { id: _, content, ...otherFields } = data;
                         return {
                             ...el,
                             ...(content || {}),
@@ -573,6 +573,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
 
         const scaleX = node.scaleX();
         const scaleY = node.scaleY();
+
+        // Reset scale on the node to prevent logic issues on next transform
         node.scaleX(1);
         node.scaleY(1);
 
@@ -586,7 +588,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
 
         if (element.type === 'text') {
             const currentFontSize = element.fontSize || 16;
-            const newFontSize = Math.max(8, Math.round(currentFontSize * scaleY)); // Min font size 8
+            const newFontSize = Math.max(8, Math.round(currentFontSize * scaleY));
 
             setElements(prev => prev.map(el =>
                 el.id === id ? { ...el, fontSize: newFontSize, x: finalX, y: finalY } : el
@@ -601,6 +603,21 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 });
             }
 
+        } else if (element.type === 'arrow') {
+            const newPoints = (element.points || []).map((p, i) => i % 2 === 0 ? p * scaleX : p * scaleY);
+
+            setElements(prev => prev.map(el =>
+                el.id === id ? { ...el, points: newPoints, x: finalX, y: finalY } : el
+            ));
+
+            if (socket) {
+                socket.emit('element:update', {
+                    id,
+                    points: newPoints,
+                    x: finalX,
+                    y: finalY
+                });
+            }
         } else {
             const newWidth = Math.max(5, node.width() * scaleX);
             const newHeight = Math.max(5, node.height() * scaleY);
@@ -1231,6 +1248,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                                     onDragMove={(e: any) => handleDragMove(e, el.id)}
                                     onDragEnd={(e: any) => handleDragEnd(el.id, e.target.x(), e.target.y())}
                                     onDblClick={() => { setEditingId(el.id); setEditText(el.text || ''); }}
+                                    onTransformEnd={(e: any) => handleTransformEnd(el.id, e.target)}
                                 />
                             );
                         }
@@ -1263,6 +1281,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                                         onDragStart={handleDragStart}
                                         onDragMove={(e: any) => handleDragMove(e, el.id)}
                                         onDragEnd={(e: any) => handleDragEnd(el.id, e.target.x(), e.target.y())}
+                                        onTransformEnd={(e: any) => handleTransformEnd(el.id, e.target)}
                                     />
                                     {isSelected && points.length >= 4 && (
                                         <>

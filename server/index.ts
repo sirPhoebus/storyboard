@@ -316,16 +316,21 @@ app.post('/api/upload', upload.single('file'), (req: any, res: any) => {
 });
 
 app.post('/api/elements', (req: any, res: any) => {
-    const { pageId, type, x, y, width, height, content } = req.body;
+    const data = req.body;
+    const { pageId, type, x, y, width, height } = data;
     const id = crypto.randomUUID();
 
     // Get max z_index
     const result = db.prepare('SELECT MAX(z_index) as maxZ FROM elements WHERE page_id = ?').get(pageId) as { maxZ: number };
     const zIndex = (result && result.maxZ !== null) ? result.maxZ + 1 : 0;
 
-    const { start_element_id, end_element_id, group_id } = req.body;
+    const dbColumns = [
+        'page_id', 'type', 'x', 'y', 'width', 'height', 'rotation',
+        'style', 'z_index', 'start_element_id', 'end_element_id', 'group_id'
+    ];
 
-    const element = {
+    const finalContent = { ...(data.content || {}) };
+    const columnValues: any = {
         id,
         page_id: pageId,
         type,
@@ -333,32 +338,35 @@ app.post('/api/elements', (req: any, res: any) => {
         y,
         width,
         height,
-        content: JSON.stringify(content),
         z_index: zIndex,
-        start_element_id,
-        end_element_id,
-        group_id
+        start_element_id: data.start_element_id,
+        end_element_id: data.end_element_id,
+        group_id: data.group_id
     };
+
+    // Capture other fields into content
+    for (const key of Object.keys(data)) {
+        if (key === 'content' || key === 'pageId') continue; // pageId is alias for page_id in req
+        if (!dbColumns.includes(key) && key !== 'id') {
+            finalContent[key] = data[key];
+        }
+    }
 
     db.prepare(`
         INSERT INTO elements (
             id, page_id, type, x, y, width, height, content, z_index, start_element_id, end_element_id, group_id
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-        id, pageId, type, x, y, width, height, element.content, zIndex, start_element_id, end_element_id, group_id
+        id, columnValues.page_id, columnValues.type, columnValues.x, columnValues.y,
+        columnValues.width, columnValues.height, JSON.stringify(finalContent),
+        zIndex, columnValues.start_element_id, columnValues.end_element_id, columnValues.group_id
     );
 
-    // Broadcast to other clients
-    const broadcastData = {
-        ...element,
-        pageId: pageId,  // Use camelCase for consistency with client
-        content: JSON.parse(element.content)
-    };
-    console.log('📥 Server creating new element:', id, 'on page:', pageId);
-    io.emit('element:add', broadcastData);
-    console.log('📤 Server broadcast element:add to all clients');
+    const fullElement = { ...columnValues, content: finalContent };
 
-    res.json({ ...element, content });
+    // Broadcast to other clients
+    io.emit('element:add', { ...fullElement, pageId }); // consistency with client pageId
+    res.json(fullElement);
 });
 
 app.put('/api/elements/reorder', (req: any, res: any) => {
@@ -401,41 +409,72 @@ io.on('connection', (socket: any) => {
     socket.on('element:update', (data: any) => {
         try {
             console.log('📥 Server received element:update:', data.id);
-            socket.broadcast.emit('element:update', data);
-            console.log('📤 Server broadcast element:update to other clients');
 
-            // Update DB
-            // Check for specific fields to update in the top level object
-            // This is getting a bit ad-hoc, ideally we'd have a clearer update contract
-            const updates: any[] = [];
+            // 1. Fetch existing element
+            const existing = db.prepare('SELECT * FROM elements WHERE id = ?').get(data.id) as any;
+            if (!existing) return;
+
+            const existingContent = JSON.parse(existing.content || '{}');
+
+            // 2. Define DB columns
+            const dbColumns = [
+                'page_id', 'type', 'x', 'y', 'width', 'height', 'rotation',
+                'style', 'z_index', 'start_element_id', 'end_element_id', 'group_id'
+            ];
+
+            // 3. Prepare merged state
+            const columnUpdates: Map<string, any> = new Map();
+            const newContent = { ...existingContent };
+
+            // Special case: if data.content is provided, merge it in first
+            if (data.content) {
+                Object.assign(newContent, data.content);
+                for (const [k, v] of Object.entries(data.content)) {
+                    if (dbColumns.includes(k)) columnUpdates.set(k, v);
+                }
+            }
+
+            // Iterate over all keys in data
+            for (const key of Object.keys(data)) {
+                if (key === 'id' || key === 'content') continue;
+
+                if (dbColumns.includes(key)) {
+                    columnUpdates.set(key, data[key]);
+                } else {
+                    newContent[key] = data[key];
+                }
+            }
+
+            // 4. Build SQL
+            const updates: string[] = [];
             const values: any[] = [];
 
-            if (data.content) {
-                updates.push('content = ?');
-                values.push(JSON.stringify(data.content));
+            for (const [col, val] of columnUpdates.entries()) {
+                updates.push(`${col} = ?`);
+                values.push(val);
+                // If it's in columns, we can remove it from newContent to keep things clean
+                // but actually it's safer to keep it in content too for the client?
+                // The client currently merges content, so it's fine.
             }
-            if (data.group_id !== undefined) {
-                updates.push('group_id = ?');
-                values.push(data.group_id);
-            }
-            if (data.start_element_id !== undefined) {
-                updates.push('start_element_id = ?');
-                values.push(data.start_element_id);
-            }
-            if (data.end_element_id !== undefined) {
-                updates.push('end_element_id = ?');
-                values.push(data.end_element_id);
-            }
-            // x and y are handled by element:move but sometimes we might want to batch update
-            if (data.x !== undefined) { updates.push('x = ?'); values.push(data.x); }
-            if (data.y !== undefined) { updates.push('y = ?'); values.push(data.y); }
-            if (data.width !== undefined) { updates.push('width = ?'); values.push(data.width); }
-            if (data.height !== undefined) { updates.push('height = ?'); values.push(data.height); }
 
-            if (updates.length > 0) {
-                values.push(data.id);
-                db.prepare(`UPDATE elements SET ${updates.join(', ')} WHERE id = ?`).run(...values);
-            }
+            // Always update content column
+            updates.push('content = ?');
+            values.push(JSON.stringify(newContent));
+
+            // 4. Update Database
+            values.push(data.id);
+            db.prepare(`UPDATE elements SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+
+            // 5. Broadcast MERGED state to all clients
+            // Merge everything back for the client
+            const broadcastPayload = {
+                ...existing,
+                ...data,
+                content: newContent
+            };
+            socket.broadcast.emit('element:update', broadcastPayload);
+            console.log('📤 Server broadcast merged element:update');
+
         } catch (error) {
             console.error('Error handling element:update:', error);
             socket.emit('error', { event: 'element:update', message: 'Update failed' });
