@@ -7,16 +7,30 @@ import multer from 'multer';
 import path from 'path';
 import crypto from 'crypto';
 
+const dataDir = process.env.DATA_DIR || process.cwd();
+const uploadsDir = path.join(dataDir, 'uploads');
+
+// Ensure uploads directory exists
+import fs from 'fs';
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+app.use('/uploads', (req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    next();
+}, express.static(uploadsDir));
+
 
 // Configure Multer
 const storage = multer.diskStorage({
     destination: (req: any, file: any, cb: any) => {
-        cb(null, 'uploads/');
+        cb(null, uploadsDir);
     },
+
     filename: (req: any, file: any, cb: any) => {
         cb(null, Date.now() + '-' + file.originalname);
     }
@@ -31,9 +45,70 @@ const io = new Server(httpServer, {
 });
 
 // API Endpoints
+app.get('/api/chapters', (req: any, res: any) => {
+    const { storyboardId } = req.query;
+    if (!storyboardId) return res.status(400).json({ error: 'storyboardId required' });
+    const chapters = db.prepare('SELECT * FROM chapters WHERE storyboard_id = ? ORDER BY order_index ASC').all(storyboardId);
+    res.json(chapters);
+});
+
+app.post('/api/chapters', (req: any, res: any) => {
+    const { title, storyboardId } = req.body;
+    const id = crypto.randomUUID();
+
+    const createChapterTransaction = db.transaction(() => {
+        const result = db.prepare('SELECT COUNT(*) as count FROM chapters WHERE storyboard_id = ?').get(storyboardId) as any;
+        const orderIndex = result ? result.count : 0;
+
+        db.prepare('INSERT INTO chapters (id, storyboard_id, title, order_index) VALUES (?, ?, ?, ?)').run(
+            id, storyboardId, title, orderIndex
+        );
+
+        // Auto-create first page for the new chapter
+        const pageId = crypto.randomUUID();
+        db.prepare('INSERT INTO pages (id, storyboard_id, chapter_id, title, order_index) VALUES (?, ?, ?, ?, ?)').run(
+            pageId, storyboardId, id, 'Page 1', 0
+        );
+
+        return { id, title, storyboard_id: storyboardId, order_index: orderIndex };
+    });
+
+    try {
+        const chapterData = createChapterTransaction();
+        res.json(chapterData);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete('/api/chapters/:id', (req: any, res: any) => {
+    const chapterId = req.params.id;
+    const transaction = db.transaction(() => {
+        const pages = db.prepare('SELECT id FROM pages WHERE chapter_id = ?').all(chapterId) as { id: string }[];
+        for (const page of pages) {
+            db.prepare('DELETE FROM elements WHERE page_id = ?').run(page.id);
+            db.prepare('DELETE FROM pages WHERE id = ?').run(page.id);
+        }
+        db.prepare('DELETE FROM chapters WHERE id = ?').run(chapterId);
+    });
+
+    try {
+        transaction();
+        res.json({ success: true });
+    } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.get('/api/pages', (req: any, res: any) => {
-    const pages = db.prepare('SELECT * FROM pages ORDER BY order_index ASC').all();
-    res.json(pages);
+    const { chapterId } = req.query;
+    if (chapterId) {
+        const pages = db.prepare('SELECT * FROM pages WHERE chapter_id = ? ORDER BY order_index ASC').all(chapterId);
+        res.json(pages);
+    } else {
+        const pages = db.prepare('SELECT * FROM pages ORDER BY order_index ASC').all();
+        res.json(pages);
+    }
 });
 
 app.get('/api/elements/:pageId', (req: any, res: any) => {
@@ -46,13 +121,22 @@ app.get('/api/elements/:pageId', (req: any, res: any) => {
 
 // Restored Page Endpoints
 app.post('/api/pages', (req: any, res: any) => {
-    const { title, storyboardId } = req.body;
+    const { title, storyboardId, chapterId } = req.body;
     const id = crypto.randomUUID();
-    const orderIndex = (db.prepare('SELECT COUNT(*) as count FROM pages WHERE storyboard_id = ?').get(storyboardId) as any).count;
-    db.prepare('INSERT INTO pages (id, storyboard_id, title, order_index) VALUES (?, ?, ?, ?)').run(
-        id, storyboardId, title, orderIndex
+
+    // Default order index logic
+    // If chapterId provided, count pages in chapter
+    let orderIndex = 0;
+    if (chapterId) {
+        orderIndex = (db.prepare('SELECT COUNT(*) as count FROM pages WHERE chapter_id = ?').get(chapterId) as any).count;
+    } else {
+        orderIndex = (db.prepare('SELECT COUNT(*) as count FROM pages WHERE storyboard_id = ?').get(storyboardId) as any).count;
+    }
+
+    db.prepare('INSERT INTO pages (id, storyboard_id, chapter_id, title, order_index) VALUES (?, ?, ?, ?, ?)').run(
+        id, storyboardId, chapterId, title, orderIndex
     );
-    res.json({ id, title, storyboard_id: storyboardId, order_index: orderIndex });
+    res.json({ id, title, storyboard_id: storyboardId, chapter_id: chapterId, order_index: orderIndex });
 });
 
 app.post('/api/pages/duplicate', (req: any, res: any) => {
@@ -62,13 +146,18 @@ app.post('/api/pages/duplicate', (req: any, res: any) => {
 
     const newId = crypto.randomUUID();
     const newTitle = `${oldPage.title} (Copy)`;
+    const chapterId = oldPage.chapter_id;
     const orderIndex = oldPage.order_index + 1; // Insert after default or handle reordering later
 
     // Shift others
-    db.prepare('UPDATE pages SET order_index = order_index + 1 WHERE storyboard_id = ? AND order_index >= ?').run(oldPage.storyboard_id, orderIndex);
+    if (chapterId) {
+        db.prepare('UPDATE pages SET order_index = order_index + 1 WHERE chapter_id = ? AND order_index >= ?').run(chapterId, orderIndex);
+    } else {
+        db.prepare('UPDATE pages SET order_index = order_index + 1 WHERE storyboard_id = ? AND order_index >= ?').run(oldPage.storyboard_id, orderIndex);
+    }
 
-    db.prepare('INSERT INTO pages (id, storyboard_id, title, order_index, thumbnail) VALUES (?, ?, ?, ?, ?)').run(
-        newId, oldPage.storyboard_id, newTitle, orderIndex, oldPage.thumbnail
+    db.prepare('INSERT INTO pages (id, storyboard_id, chapter_id, title, order_index, thumbnail) VALUES (?, ?, ?, ?, ?, ?)').run(
+        newId, oldPage.storyboard_id, chapterId, newTitle, orderIndex, oldPage.thumbnail
     );
 
     const oldElements = db.prepare('SELECT * FROM elements WHERE page_id = ?').all(pageId) as any[];
@@ -171,8 +260,11 @@ app.post('/api/upload', upload.single('file'), (req: any, res: any) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
     }
-    const url = `http://localhost:5000/uploads/${req.file.filename}`;
+    const host = req.get('host');
+    const protocol = req.protocol;
+    const url = `${protocol}://${host}/uploads/${req.file.filename}`;
     res.json({ url, type: req.file.mimetype });
+
 });
 
 app.post('/api/elements', (req: any, res: any) => {
@@ -209,7 +301,14 @@ app.post('/api/elements', (req: any, res: any) => {
     );
 
     // Broadcast to other clients
-    io.emit('element:add', { ...element, content: JSON.parse(element.content) });
+    const broadcastData = {
+        ...element,
+        pageId: pageId,  // Use camelCase for consistency with client
+        content: JSON.parse(element.content)
+    };
+    console.log('📥 Server creating new element:', id, 'on page:', pageId);
+    io.emit('element:add', broadcastData);
+    console.log('📤 Server broadcast element:add to all clients');
 
     res.json({ ...element, content });
 });
@@ -234,47 +333,69 @@ io.on('connection', (socket: any) => {
     console.log('A user connected:', socket.id);
 
     socket.on('element:move', (data: any) => {
-        socket.broadcast.emit('element:move', data);
-        db.prepare('UPDATE elements SET x = ?, y = ? WHERE id = ?').run(data.x, data.y, data.id);
+        try {
+            console.log('📥 Server received element:move:', data.id);
+            socket.broadcast.emit('element:move', data);
+            console.log('📤 Server broadcast element:move to other clients');
+            db.prepare('UPDATE elements SET x = ?, y = ? WHERE id = ?').run(data.x, data.y, data.id);
+        } catch (error) {
+            console.error('Error handling element:move:', error);
+            socket.emit('error', { event: 'element:move', message: 'Update failed' });
+        }
     });
 
     socket.on('element:update', (data: any) => {
-        socket.broadcast.emit('element:update', data);
+        try {
+            console.log('📥 Server received element:update:', data.id);
+            socket.broadcast.emit('element:update', data);
+            console.log('📤 Server broadcast element:update to other clients');
 
-        // Update DB
-        // Check for specific fields to update in the top level object
-        // This is getting a bit ad-hoc, ideally we'd have a clearer update contract
-        const updates: any[] = [];
-        const values: any[] = [];
+            // Update DB
+            // Check for specific fields to update in the top level object
+            // This is getting a bit ad-hoc, ideally we'd have a clearer update contract
+            const updates: any[] = [];
+            const values: any[] = [];
 
-        if (data.content) {
-            updates.push('content = ?');
-            values.push(JSON.stringify(data.content));
-        }
-        if (data.group_id !== undefined) {
-            updates.push('group_id = ?');
-            values.push(data.group_id);
-        }
-        if (data.start_element_id !== undefined) {
-            updates.push('start_element_id = ?');
-            values.push(data.start_element_id);
-        }
-        if (data.end_element_id !== undefined) {
-            updates.push('end_element_id = ?');
-            values.push(data.end_element_id);
-        }
-        // x and y are handled by element:move but sometimes we might want to batch update
-        if (data.x !== undefined) { updates.push('x = ?'); values.push(data.x); }
-        if (data.y !== undefined) { updates.push('y = ?'); values.push(data.y); }
+            if (data.content) {
+                updates.push('content = ?');
+                values.push(JSON.stringify(data.content));
+            }
+            if (data.group_id !== undefined) {
+                updates.push('group_id = ?');
+                values.push(data.group_id);
+            }
+            if (data.start_element_id !== undefined) {
+                updates.push('start_element_id = ?');
+                values.push(data.start_element_id);
+            }
+            if (data.end_element_id !== undefined) {
+                updates.push('end_element_id = ?');
+                values.push(data.end_element_id);
+            }
+            // x and y are handled by element:move but sometimes we might want to batch update
+            if (data.x !== undefined) { updates.push('x = ?'); values.push(data.x); }
+            if (data.y !== undefined) { updates.push('y = ?'); values.push(data.y); }
+            if (data.width !== undefined) { updates.push('width = ?'); values.push(data.width); }
+            if (data.height !== undefined) { updates.push('height = ?'); values.push(data.height); }
 
-        if (updates.length > 0) {
-            values.push(data.id);
-            db.prepare(`UPDATE elements SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+            if (updates.length > 0) {
+                values.push(data.id);
+                db.prepare(`UPDATE elements SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+            }
+        } catch (error) {
+            console.error('Error handling element:update:', error);
+            socket.emit('error', { event: 'element:update', message: 'Update failed' });
         }
     });
 
     socket.on('element:delete', (data: { id: string }) => {
-        socket.broadcast.emit('element:delete', data);
+        try {
+            console.log('📥 Server received element:delete:', data.id);
+            socket.broadcast.emit('element:delete', data);
+            console.log('📤 Server broadcast element:delete to other clients');
+        } catch (error) {
+            console.error('Error handling element:delete:', error);
+        }
     });
 
     socket.on('disconnect', () => {
@@ -282,7 +403,17 @@ io.on('connection', (socket: any) => {
     });
 });
 
-const PORT = 5000;
-httpServer.listen(PORT, () => {
+// Serve static files in production
+if (process.env.NODE_ENV === 'production') {
+    const clientDistPath = path.join(process.cwd(), '..', 'client', 'dist');
+    app.use(express.static(clientDistPath));
+    app.get('*', (req, res) => {
+        res.sendFile(path.join(clientDistPath, 'index.html'));
+    });
+}
+
+const PORT = process.env.PORT || 5000;
+httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
 });
+

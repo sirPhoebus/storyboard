@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Stage, Layer, Rect, Text, Arrow, Circle, Transformer, Line as KonvaLine } from 'react-konva';
 import { useSocket } from '../hooks/useSocket';
 import MultimediaElement from './MultimediaElement';
+import { API_BASE_URL } from '../config';
+
 
 interface Element {
     id: string;
@@ -75,7 +77,15 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
 
     const [elements, setElements] = useState<Element[]>([]);
     const [editingId, setEditingId] = useState<string | null>(null);
-    const [selectedId, setSelectedId] = useState<string | null>(null);
+    const [selectedIds, setSelectedIds] = useState<string[]>([]);
+    // Derived selectedId for backward compat until full refactor
+    const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
+
+    const setSelectedId = (id: string | null) => {
+        if (id === null) setSelectedIds([]);
+        else setSelectedIds([id]);
+    };
+
     const [history, setHistory] = useState<Element[][]>([]);
     const [redoStack, setRedoStack] = useState<Element[][]>([]);
     const [clipboard, setClipboard] = useState<Element | null>(null);
@@ -83,7 +93,15 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const stageRef = useRef<any>(null);
     const transformerRef = useRef<any>(null);
-    const selectedNodeRef = useRef<any>(null);
+    // Element refs map
+    const elementRefs = useRef<{ [key: string]: any }>({});
+
+    // NOTE: selectedNodeRef is removed, using elementRefs instead
+
+    // Selection Box State
+    const [selectionBox, setSelectionBox] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
+    const [isSelecting, setIsSelecting] = useState(false);
+    const selectionStartRef = useRef<{ x: number, y: number } | null>(null);
 
     // Zoom & Pan State
     const [stageScale, setStageScale] = useState(1);
@@ -93,11 +111,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
     const [showGrid, setShowGrid] = useState(false);
     const [snapToGrid, setSnapToGrid] = useState(false);
     const gridSize = 20;
-
-    // Grouping & Multi-select State
-    // Currently selectedId is string | null. For multi-select we might need an array.
-    // For this prototype, we'll keep selectedId as single but support 'Group' operations on a single selected item if it's part of a group?
-    // Or we allow Shift+Click to select multiple.
     // Let's first support "Smart Linking" updates.
 
     const saveToHistory = () => {
@@ -108,7 +121,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
     useEffect(() => {
         if (!pageId) return;
 
-        fetch(`http://localhost:5000/api/elements/${pageId}`)
+        fetch(`${API_BASE_URL}/api/elements/${pageId}`)
+
             .then(res => res.json())
             .then(data => {
                 setElements(data.map((el: any) => ({
@@ -129,15 +143,35 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
             );
         });
 
-        socket.on('element:update', (data: { id: string, content: any }) => {
-            setElements((prev: Element[]) =>
-                prev.map((el: Element) => (el.id === data.id ? { ...el, ...data.content } : el))
-            );
+        socket.on('element:update', (data: { id: string, content?: any, [key: string]: any }) => {
+            setElements((prev: Element[]) => {
+                return prev.map((el: Element) => {
+                    if (el.id === data.id) {
+                        // Merge content if present, plus any top-level fields
+                        const { id, content, ...otherFields } = data;
+                        return {
+                            ...el,
+                            ...(content || {}),
+                            ...otherFields
+                        };
+                    }
+                    return el;
+                });
+            });
         });
 
         socket.on('element:add', (data: any) => {
+            console.log('📥 Client received element:add:', data.id, 'for page:', data.pageId, 'current page:', pageId);
+            if (data.pageId !== pageId) {
+                console.log('⏭️ Skipping element:add - different page');
+                return;
+            }
             setElements((prev: Element[]) => {
-                if (prev.find(el => el.id === data.id)) return prev;
+                if (prev.find(el => el.id === data.id)) {
+                    console.log('⏭️ Element already exists, skipping');
+                    return prev;
+                }
+                console.log('✅ Adding new element to canvas');
                 return [...prev, { ...data, ...data.content }];
             });
         });
@@ -162,7 +196,27 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
             socket.off('element:delete');
             socket.off('element:reorder');
         };
-    }, [socket, selectedId]);
+    }, [socket, selectedId, pageId]);
+
+    // Sync transformer to selected elements
+    useEffect(() => {
+        if (transformerRef.current) {
+            const selectedNodes = selectedIds
+                .map(id => elementRefs.current[id])
+                .filter(Boolean);
+            transformerRef.current.nodes(selectedNodes);
+            transformerRef.current.getLayer()?.batchDraw();
+        }
+    }, [selectedIds]);
+
+    // Debug: Log socket status
+    useEffect(() => {
+        if (socket) {
+            console.log('🔌 Socket object:', socket.id, 'connected:', socket.connected);
+        } else {
+            console.warn('⚠️ Socket object is null');
+        }
+    }, [socket]);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -200,14 +254,15 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
                         const { id, ...content } = newElement;
 
                         // We need to POST to create
-                        fetch('http://localhost:5000/api/elements', {
+                        fetch(`${API_BASE_URL}/api/elements`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ ...content, pageId }) // Ensure pageId is set
                         })
+
                             .then(res => res.json())
                             .then(data => {
-                                setElements(prev => [...prev, { ...data, ...data.content }]);
+                                // Element will be added via socket broadcast
                                 setSelectedId(data.id); // Select the new item
                                 updateThumbnail();
                             });
@@ -219,13 +274,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [selectedId, editingId, history, redoStack, elements]);
-
-    useEffect(() => {
-        if (transformerRef.current && selectedNodeRef.current) {
-            transformerRef.current.nodes([selectedNodeRef.current]);
-            transformerRef.current.getLayer().batchDraw();
-        }
-    }, [selectedId]);
 
     const handleUndo = () => {
         if (history.length === 0) return;
@@ -251,7 +299,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
         if (!stageRef.current || !pageId) return;
         try {
             const dataURL = stageRef.current.toDataURL({ pixelRatio: 0.2 });
-            fetch(`http://localhost:5000/api/pages/${pageId}`, {
+            fetch(`${API_BASE_URL}/api/pages/${pageId}`, {
+
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ thumbnail: dataURL })
@@ -263,7 +312,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
 
     const handleDeleteElement = (id: string) => {
         saveToHistory();
-        fetch(`http://localhost:5000/api/elements/${id}`, {
+        fetch(`${API_BASE_URL}/api/elements/${id}`, {
+
             method: 'DELETE'
         }).then(() => {
             setElements(prev => prev.filter(el => el.id !== id));
@@ -275,6 +325,43 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
 
     const handleDragStart = () => {
         saveToHistory();
+    };
+
+    const handleDragMove = (e: any, id: string) => {
+        const draggedElement = elements.find(el => el.id === id);
+        if (!draggedElement) return;
+
+        const node = e.target;
+        const newX = node.x();
+        const newY = node.y();
+        const dx = newX - draggedElement.x;
+        const dy = newY - draggedElement.y;
+
+        // Move other selected elements
+        if (selectedIds.includes(id)) {
+            selectedIds.forEach(selectedId => {
+                if (selectedId !== id) {
+                    const otherNode = elementRefs.current[selectedId];
+                    const otherEl = elements.find(item => item.id === selectedId);
+                    if (otherNode && otherEl) {
+                        otherNode.x(otherEl.x + dx);
+                        otherNode.y(otherEl.y + dy);
+                    }
+                }
+            });
+        }
+
+        // Move group members if not selected
+        if (draggedElement.group_id && !selectedIds.includes(id)) {
+            const groupMembers = elements.filter(el => el.group_id === draggedElement.group_id && el.id !== id);
+            groupMembers.forEach(member => {
+                const memberNode = elementRefs.current[member.id];
+                if (memberNode) {
+                    memberNode.x(member.x + dx);
+                    memberNode.y(member.y + dy);
+                }
+            });
+        }
     };
 
     const handleDragEnd = (id: string, x: number, y: number) => {
@@ -289,14 +376,25 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
         const draggedElement = elements.find(el => el.id === id);
         if (!draggedElement) return;
 
-        // Grouping Logic: Find if element is in a group
+        // Grouping & Selection Logic
         let elementsToUpdate = [{ id, x: finalX, y: finalY }];
 
-        if (draggedElement.group_id) {
-            const groupMembers = elements.filter(el => el.group_id === draggedElement.group_id && el.id !== id);
-            const dx = finalX - draggedElement.x;
-            const dy = finalY - draggedElement.y;
+        const dx = finalX - draggedElement.x;
+        const dy = finalY - draggedElement.y;
 
+        if (selectedIds.includes(id)) {
+            // Move all other selected elements
+            selectedIds.forEach(selectedId => {
+                if (selectedId !== id) {
+                    const el = elements.find(e => e.id === selectedId);
+                    if (el) {
+                        elementsToUpdate.push({ id: selectedId, x: el.x + dx, y: el.y + dy });
+                    }
+                }
+            });
+        } else if (draggedElement.group_id) {
+            // If not selected, but part of a group, move group (existing logic)
+            const groupMembers = elements.filter(el => el.group_id === draggedElement.group_id && el.id !== id);
             groupMembers.forEach(member => {
                 elementsToUpdate.push({ id: member.id, x: member.x + dx, y: member.y + dy });
             });
@@ -310,7 +408,12 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
         );
 
         elementsToUpdate.forEach(update => {
-            if (socket) socket.emit('element:move', { id: update.id, x: update.x, y: update.y });
+            if (socket) {
+                console.log('📤 Emitting element:move:', update);
+                socket.emit('element:move', { id: update.id, x: update.x, y: update.y });
+            } else {
+                console.warn('⚠️ Cannot emit element:move - socket is null');
+            }
         });
 
         // Smart Linking Logic: Update connected arrows
@@ -376,20 +479,9 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
                 const endEl = nextElements.find(el => el.id === arrow.end_element_id);
                 if (endEl && arrow.points) {
                     // We need arrow absolute pos
-                    const arrowAbsX = arrow.x; // We use current arrow x (or updated if handled above?)
-                    // If start also moved, we would have updated arrow.x in previous block? 
-                    // Complexity: if both move (group), relative points remain same!
-
-                    // If we are in a group, arrow might be in group too? 
-                    // If arrow is in group, it moved with group.
-                    // If arrow is NOT in group check:
-
-                    if (!DragEvent) { /* just a placeholder to say this logic is getting complex */ }
-
+                    // arrow.x is start.
                     const targetX = endEl.x + endEl.width / 2;
                     const targetY = endEl.y + endEl.height / 2;
-
-                    // arrow.x is start.
                     const relativeTargetX = targetX - arrow.x;
                     const relativeTargetY = targetY - arrow.y;
 
@@ -431,13 +523,13 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
 
     const handleTransformEnd = (id: string, node: any) => {
         saveToHistory();
+        const element = elements.find(el => el.id === id);
+        if (!element) return;
+
         const scaleX = node.scaleX();
         const scaleY = node.scaleY();
         node.scaleX(1);
         node.scaleY(1);
-
-        const newWidth = Math.max(5, node.width() * scaleX);
-        const newHeight = Math.max(5, node.height() * scaleY);
 
         let finalX = node.x();
         let finalY = node.y();
@@ -447,15 +539,40 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
             finalY = Math.round(finalY / gridSize) * gridSize;
         }
 
-        setElements(prev => prev.map(el =>
-            el.id === id ? { ...el, width: newWidth, height: newHeight, x: finalX, y: finalY } : el
-        ));
+        if (element.type === 'text') {
+            const currentFontSize = element.fontSize || 16;
+            const newFontSize = Math.max(8, Math.round(currentFontSize * scaleY)); // Min font size 8
 
-        if (socket) {
-            socket.emit('element:update', {
-                id,
-                content: { width: newWidth, height: newHeight, x: node.x(), y: node.y() }
-            });
+            setElements(prev => prev.map(el =>
+                el.id === id ? { ...el, fontSize: newFontSize, x: finalX, y: finalY } : el
+            ));
+
+            if (socket) {
+                socket.emit('element:update', {
+                    id,
+                    fontSize: newFontSize,
+                    x: finalX,
+                    y: finalY
+                });
+            }
+
+        } else {
+            const newWidth = Math.max(5, node.width() * scaleX);
+            const newHeight = Math.max(5, node.height() * scaleY);
+
+            setElements(prev => prev.map(el =>
+                el.id === id ? { ...el, width: newWidth, height: newHeight, x: finalX, y: finalY } : el
+            ));
+
+            if (socket) {
+                socket.emit('element:update', {
+                    id,
+                    width: newWidth,
+                    height: newHeight,
+                    x: finalX,
+                    y: finalY
+                });
+            }
         }
         updateThumbnail();
     };
@@ -492,14 +609,15 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
             height: 150,
             content: { fill: 'transparent', stroke: 'white', strokeWidth: 1 }
         };
-        fetch('http://localhost:5000/api/elements', {
+        fetch(`${API_BASE_URL}/api/elements`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(newZone)
         })
+
             .then(res => res.json())
-            .then(data => {
-                setElements(prev => [...prev, { ...data, ...data.content }]);
+            .then(() => {
+                // Element will be added via socket broadcast
                 updateThumbnail();
             });
     };
@@ -512,18 +630,18 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
             type: 'text',
             x: 100,
             y: 100,
-            width: 200,
-            height: 50,
+            fontSize: 16,
             content: { text: 'Double click to edit' }
         };
-        fetch('http://localhost:5000/api/elements', {
+        fetch(`${API_BASE_URL}/api/elements`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(newText)
         })
+
             .then(res => res.json())
-            .then(data => {
-                setElements(prev => [...prev, { ...data, ...data.content }]);
+            .then(() => {
+                // Element will be added via socket broadcast
                 updateThumbnail();
             });
     };
@@ -548,68 +666,105 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
             // Default horizontal arrow: 100px length
             content: { points: [0, 0, 100, 0], fill: 'black', stroke: 'black', strokeWidth: 5 }
         };
-        fetch('http://localhost:5000/api/elements', {
+        fetch(`${API_BASE_URL}/api/elements`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(newArrow)
         })
+
             .then(res => res.json())
-            .then(data => {
-                setElements(prev => [...prev, { ...data, ...data.content }]);
+            .then(() => {
+                // Element will be added via socket broadcast
                 updateThumbnail();
             });
     };
 
     const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0];
-        if (!file || !pageId) return;
+        const files = event.target.files;
+        if (!files || files.length === 0 || !pageId) return;
         saveToHistory();
-        const formData = new FormData();
-        formData.append('file', file);
-        try {
-            const uploadRes = await fetch('http://localhost:5000/api/upload', {
-                method: 'POST',
-                body: formData,
-            });
-            const { url, type } = await uploadRes.json();
-            const elementType = type.startsWith('video') ? 'video' : 'image';
-            let finalWidth = 400;
-            let finalHeight = 300;
-            if (elementType === 'image') {
-                const img = new Image();
-                img.src = url;
-                await new Promise((resolve) => {
-                    img.onload = () => {
-                        const ratio = img.width / img.height;
-                        if (ratio > 1) { finalWidth = 400; finalHeight = 400 / ratio; }
-                        else { finalHeight = 400; finalWidth = 400 * ratio; }
-                        resolve(null);
-                    };
+
+        const uploads = Array.from(files).map(async (file) => {
+            const formData = new FormData();
+            formData.append('file', file);
+            try {
+                const uploadRes = await fetch(`${API_BASE_URL}/api/upload`, {
+
+                    method: 'POST',
+                    body: formData,
                 });
-            } else if (elementType === 'video') {
-                const video = document.createElement('video');
-                video.src = url;
-                await new Promise((resolve) => {
-                    video.onloadedmetadata = () => {
-                        const ratio = video.videoWidth / video.videoHeight;
-                        if (ratio > 1) { finalWidth = 400; finalHeight = 400 / ratio; }
-                        else { finalHeight = 400; finalWidth = 400 * ratio; }
-                        resolve(null);
-                    };
-                });
+                const { url, type } = await uploadRes.json();
+                const elementType = type.startsWith('video') ? 'video' : 'image';
+                let finalWidth = 400;
+                let finalHeight = 300;
+
+                if (elementType === 'image') {
+                    const img = new Image();
+                    img.src = url;
+                    await new Promise((resolve) => {
+                        img.onload = () => {
+                            const ratio = img.width / img.height;
+                            if (ratio > 1) { finalWidth = 400; finalHeight = 400 / ratio; }
+                            else { finalHeight = 400; finalWidth = 400 * ratio; }
+                            resolve(null);
+                        };
+                        img.onerror = () => resolve(null);
+                    });
+                } else if (elementType === 'video') {
+                    const video = document.createElement('video');
+                    video.src = url;
+                    await new Promise((resolve) => {
+                        video.onloadedmetadata = () => {
+                            const ratio = video.videoWidth / video.videoHeight;
+                            if (ratio > 1) { finalWidth = 400; finalHeight = 400 / ratio; }
+                            else { finalHeight = 400; finalWidth = 400 * ratio; }
+                            resolve(null);
+                        };
+                        video.onerror = () => resolve(null);
+                    });
+                }
+                return { type: elementType, width: finalWidth, height: finalHeight, url };
+            } catch (error) {
+                console.error('Upload failed:', error);
+                return null;
             }
-            const newElement = { pageId, type: elementType, x: 100, y: 100, width: finalWidth, height: finalHeight, content: { url } };
-            const elementRes = await fetch('http://localhost:5000/api/elements', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(newElement)
-            });
-            const data = await elementRes.json();
-            setElements(prev => [...prev, { ...data, ...data.content }]);
-            updateThumbnail();
-        } catch (error) {
-            console.error('Upload failed:', error);
+        });
+
+        const results = await Promise.all(uploads);
+        const validResults = results.filter(Boolean);
+
+        let currentX = 100;
+        const currentY = 100;
+        const spacing = 20;
+
+        for (const data of validResults) {
+            if (!data) continue;
+            const newElement = {
+                pageId,
+                type: data.type,
+                x: currentX,
+                y: currentY,
+                width: data.width,
+                height: data.height,
+                content: { url: data.url }
+            };
+
+            try {
+                const elementRes = await fetch(`${API_BASE_URL}/api/elements`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newElement)
+                });
+
+                await elementRes.json();
+                // Element will be added via socket broadcast
+                currentX += data.width + spacing;
+            } catch (e) {
+                console.error('Failed to create element:', e);
+            }
         }
+        updateThumbnail();
+        if (fileInputRef.current) fileInputRef.current.value = '';
     };
 
     const handleReorder = (direction: 'front' | 'back') => {
@@ -629,7 +784,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
 
         setElements(newElements);
 
-        fetch('http://localhost:5000/api/elements/reorder', {
+        fetch(`${API_BASE_URL}/api/elements/reorder`, {
+
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ pageId, order: newElements.map(el => el.id) })
@@ -653,6 +809,73 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
             x: -(mousePointTo.x - stage.getPointerPosition().x / newScale) * newScale,
             y: -(mousePointTo.y - stage.getPointerPosition().y / newScale) * newScale
         });
+    };
+
+    const handleStageMouseDown = (e: any) => {
+        // clicked on stage - clear selection
+        if (e.target === e.target.getStage()) {
+            if (e.evt.ctrlKey) {
+                setIsSelecting(true);
+                const pos = e.target.getStage().getPointerPosition();
+                const x = (pos.x - stagePos.x) / stageScale;
+                const y = (pos.y - stagePos.y) / stageScale;
+                selectionStartRef.current = { x, y };
+                setSelectionBox({ x, y, width: 0, height: 0 });
+            } else {
+                setSelectedIds([]);
+            }
+            return;
+        }
+
+        // clicked on transformer - do nothing
+        const clickedOnTransformer = e.target.getParent().className === 'Transformer';
+        if (clickedOnTransformer) {
+            return;
+        }
+    };
+
+    const handleStageMouseMove = (e: any) => {
+        if (!isSelecting || !selectionStartRef.current) return;
+
+        const stage = e.target.getStage();
+        const pos = stage.getPointerPosition();
+        const x = (pos.x - stagePos.x) / stageScale;
+        const y = (pos.y - stagePos.y) / stageScale;
+
+        const startX = selectionStartRef.current.x;
+        const startY = selectionStartRef.current.y;
+
+        setSelectionBox({
+            x: Math.min(startX, x),
+            y: Math.min(startY, y),
+            width: Math.abs(x - startX),
+            height: Math.abs(y - startY)
+        });
+    };
+
+    const handleStageMouseUp = (e: any) => {
+        if (isSelecting && selectionBox) {
+            const box = selectionBox;
+            // Find intersecting elements
+            const selected = elements.filter(el => {
+                // Check intersection
+                return !(
+                    box.x > el.x + el.width ||
+                    box.x + box.width < el.x ||
+                    box.y > el.y + el.height ||
+                    box.y + box.height < el.y
+                );
+            });
+            setSelectedIds(selected.map(el => el.id));
+            setIsSelecting(false);
+            setSelectionBox(null);
+            selectionStartRef.current = null;
+        } else {
+            // Drag end logic for stage update is handled in onDragEnd prop
+            if (e.target === e.target.getStage()) {
+                setStagePos({ x: e.target.x(), y: e.target.y() });
+            }
+        }
     };
 
     const renderGrid = () => {
@@ -684,26 +907,17 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
     };
 
 
-    const handleGroup = () => {
-        if (!selectedId && !pageId) return;
-        // Grouping logic: currently we only select one item manually.
-        // We need multi-select to group useful things.
-        // But if we select one item that is already part of a group, we might want to "select whole group"?
-        // Or if we select one item, maybe we want to select others to group?
-        // Let's implement correct multi-select first?
-        // Or simpler: Click 'Group', then click items to add to group?
-        // For now, let's assume we have a way to set multiple selectedId?
-        // No, let's implement a simple "Group All" (all items on page) just for testing? No that's bad.
-
-        // Better: Toggle "Multi-select Mode".
-        // Better: Toggle "Multi-select Mode".
-    };
-
     const handleUpdateStyle = (id: string, style: Partial<Element>) => {
         saveToHistory();
         setElements(prev => prev.map(el => (el.id === id ? { ...el, ...style } : el)));
-        if (socket) socket.emit('element:update', { id, content: style });
+        if (socket) socket.emit('element:update', { id, ...style });
         updateThumbnail();
+    };
+
+    // Local-only video control (no socket sync)
+    const handleLocalVideoControl = (id: string, style: Partial<Element>) => {
+        setElements(prev => prev.map(el => (el.id === id ? { ...el, ...style } : el)));
+        // NO socket emit, NO history save - purely local playback state
     };
 
     const selectedElement = elements.find(el => el.id === selectedId);
@@ -729,7 +943,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
                 <button onClick={handleAddText} style={mainButtonStyle}>Add Text</button>
                 <button onClick={handleAddArrow} style={mainButtonStyle}>Add Arrow</button>
                 <button onClick={() => fileInputRef.current?.click()} style={mainButtonStyle}>Add Media</button>
-                <input type="file" ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} accept="image/*,video/*" />
+                <input type="file" multiple ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} accept="image/*,video/*" />
 
                 <div style={separatorStyle} />
 
@@ -741,10 +955,10 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
 
                 {selectedElement && selectedElement.type === 'video' && (
                     <>
-                        <button onClick={() => handleUpdateStyle(selectedElement.id, { isPlaying: !selectedElement.isPlaying })} style={selectedElement.isPlaying ? activeSubButtonStyle : subButtonStyle}>
+                        <button onClick={() => handleLocalVideoControl(selectedElement.id, { isPlaying: !selectedElement.isPlaying })} style={selectedElement.isPlaying ? activeSubButtonStyle : subButtonStyle}>
                             {selectedElement.isPlaying ? 'Pause' : 'Play'}
                         </button>
-                        <button onClick={() => handleUpdateStyle(selectedElement.id, { isMuted: !selectedElement.isMuted })} style={selectedElement.isMuted ? activeSubButtonStyle : subButtonStyle}>
+                        <button onClick={() => handleLocalVideoControl(selectedElement.id, { isMuted: !selectedElement.isMuted })} style={selectedElement.isMuted ? activeSubButtonStyle : subButtonStyle}>
                             {selectedElement.isMuted ? 'Unmute' : 'Mute'}
                         </button>
                     </>
@@ -810,19 +1024,23 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
                         }}
                         style={{
                             position: 'absolute',
-                            top: (elements.find(el => el.id === editingId)?.y || 0) + 'px',
-                            left: (elements.find(el => el.id === editingId)?.x || 0) + 'px',
-                            width: (elements.find(el => el.id === editingId)?.width || 200) + 'px',
-                            height: (elements.find(el => el.id === editingId)?.height || 50) + 'px',
+                            top: ((elements.find(el => el.id === editingId)?.y || 0) * stageScale + stagePos.y - 7) + 'px',
+                            left: ((elements.find(el => el.id === editingId)?.x || 0) * stageScale + stagePos.x - 7) + 'px',
+                            minWidth: '200px',
+                            minHeight: '50px',
+                            width: 'auto',
+                            height: 'auto',
                             zIndex: 1000,
                             border: '2px solid #3498db',
                             outline: 'none',
                             padding: '5px',
                             margin: '0',
-                            fontSize: '16px',
+                            fontSize: ((elements.find(el => el.id === editingId)?.fontSize || 16) * stageScale) + 'px',
                             fontFamily: 'sans-serif',
-                            resize: 'none',
+                            resize: 'both',
+                            overflow: 'hidden',
                             background: 'white',
+                            whiteSpace: 'nowrap',
                             boxShadow: '0 2px 10px rgba(0,0,0,0.2)'
                         }}
                     />
@@ -833,19 +1051,16 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
                 ref={stageRef}
                 width={window.innerWidth - (isSidebarCollapsed ? 60 : 260)}
                 height={window.innerHeight}
-                onMouseDown={(e: any) => {
-                    if (e.target === e.target.getStage()) {
-                        setSelectedId(null);
-                    }
-                }}
+                onMouseDown={handleStageMouseDown}
+                onMouseMove={handleStageMouseMove}
+                onMouseUp={handleStageMouseUp}
                 onWheel={handleWheel}
-                draggable={!editingId && !selectedId} // Enable pan when not editing/formatting
+                draggable={!editingId && !selectedId && !isSelecting}
                 x={stagePos.x}
                 y={stagePos.y}
                 scaleX={stageScale}
                 scaleY={stageScale}
                 onDragEnd={(e) => {
-                    // Update stage pos only if stage itself is dragged
                     if (e.target === e.target.getStage()) {
                         setStagePos({ x: e.target.x(), y: e.target.y() });
                     }
@@ -854,13 +1069,21 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
                 <Layer>
                     {renderGrid()}
                     {elements.map((el: Element) => {
-                        const isSelected = selectedId === el.id;
+                        const isSelected = selectedIds.includes(el.id);
+
+                        // Attach ref
+                        const attachRef = (node: any) => {
+                            if (elementRefs.current) {
+                                if (node) elementRefs.current[el.id] = node;
+                                else delete elementRefs.current[el.id];
+                            }
+                        };
 
                         if (el.type === 'rect') {
                             return (
                                 <Rect
                                     key={el.id}
-                                    ref={isSelected ? selectedNodeRef : null}
+                                    ref={attachRef}
                                     x={el.x}
                                     y={el.y}
                                     width={el.width}
@@ -869,8 +1092,20 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
                                     stroke={el.stroke || 'white'}
                                     strokeWidth={el.strokeWidth || 1}
                                     draggable={!editingId}
-                                    onClick={() => setSelectedId(el.id)}
+                                    onClick={(e) => {
+                                        e.cancelBubble = true;
+                                        if (e.evt.ctrlKey) {
+                                            if (isSelected) {
+                                                setSelectedIds(prev => prev.filter(id => id !== el.id));
+                                            } else {
+                                                setSelectedIds(prev => [...prev, el.id]);
+                                            }
+                                        } else {
+                                            setSelectedIds([el.id]);
+                                        }
+                                    }}
                                     onDragStart={handleDragStart}
+                                    onDragMove={(e: any) => handleDragMove(e, el.id)}
                                     onDragEnd={(e: any) => handleDragEnd(el.id, e.target.x(), e.target.y())}
                                     onTransformEnd={(e: any) => handleTransformEnd(el.id, e.target)}
                                 />
@@ -881,19 +1116,28 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
                             return (
                                 <Text
                                     key={el.id}
+                                    ref={attachRef}
                                     x={el.x}
                                     y={el.y}
-                                    width={el.width}
-                                    height={el.height}
                                     text={el.text}
                                     fontSize={el.fontSize || 16}
                                     fontStyle={el.fontStyle}
                                     fill={el.fill || "white"}
-                                    stroke={isSelected ? '#3498db' : undefined}
-                                    strokeWidth={isSelected ? 1 : 0}
                                     draggable={!editingId}
-                                    onClick={() => setSelectedId(el.id)}
+                                    onClick={(e) => {
+                                        e.cancelBubble = true;
+                                        if (e.evt.ctrlKey) {
+                                            if (isSelected) {
+                                                setSelectedIds(prev => prev.filter(id => id !== el.id));
+                                            } else {
+                                                setSelectedIds(prev => [...prev, el.id]);
+                                            }
+                                        } else {
+                                            setSelectedIds([el.id]);
+                                        }
+                                    }}
                                     onDragStart={handleDragStart}
+                                    onDragMove={(e: any) => handleDragMove(e, el.id)}
                                     onDragEnd={(e: any) => handleDragEnd(el.id, e.target.x(), e.target.y())}
                                     onDblClick={() => { setEditingId(el.id); setEditText(el.text || ''); }}
                                 />
@@ -905,14 +1149,28 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
                             return (
                                 <React.Fragment key={el.id}>
                                     <Arrow
+                                        ref={attachRef}
                                         x={el.x}
                                         y={el.y}
                                         points={points}
                                         stroke={isSelected ? '#3498db' : 'white'}
+                                        strokeWidth={el.strokeWidth || 5}
                                         fill="white"
                                         draggable={!editingId}
-                                        onClick={() => setSelectedId(el.id)}
+                                        onClick={(e) => {
+                                            e.cancelBubble = true;
+                                            if (e.evt.ctrlKey) {
+                                                if (isSelected) {
+                                                    setSelectedIds(prev => prev.filter(id => id !== el.id));
+                                                } else {
+                                                    setSelectedIds(prev => [...prev, el.id]);
+                                                }
+                                            } else {
+                                                setSelectedIds([el.id]);
+                                            }
+                                        }}
                                         onDragStart={handleDragStart}
+                                        onDragMove={(e: any) => handleDragMove(e, el.id)}
                                         onDragEnd={(e: any) => handleDragEnd(el.id, e.target.x(), e.target.y())}
                                     />
                                     {isSelected && points.length >= 4 && (
@@ -953,7 +1211,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
                             return (
                                 <MultimediaElement
                                     key={el.id}
-                                    ref={isSelected ? selectedNodeRef : null}
+                                    ref={attachRef}
                                     id={el.id}
                                     type={el.type as any}
                                     x={el.x}
@@ -963,7 +1221,18 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
                                     url={el.url || ''}
                                     isSelected={isSelected}
                                     draggable={!editingId}
-                                    onClick={() => setSelectedId(el.id)}
+                                    onClick={(e: any) => {
+                                        e.cancelBubble = true;
+                                        if (e.evt.ctrlKey) {
+                                            if (isSelected) {
+                                                setSelectedIds(prev => prev.filter(id => id !== el.id));
+                                            } else {
+                                                setSelectedIds(prev => [...prev, el.id]);
+                                            }
+                                        } else {
+                                            setSelectedIds([el.id]);
+                                        }
+                                    }}
                                     onDragEnd={(e: any) => handleDragEnd(el.id, e.target.x(), e.target.y())}
                                     onTransformEnd={(e: any) => handleTransformEnd(el.id, e.target)}
                                     isPlaying={el.isPlaying}
@@ -973,19 +1242,31 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
                         }
                         return null;
                     })}
-                    {selectedId && (
-                        <Transformer
-                            ref={transformerRef}
-                            boundBoxFunc={(oldBox, newBox) => {
-                                if (newBox.width < 5 || newBox.height < 5) {
-                                    return oldBox;
-                                }
-                                return newBox;
-                            }}
+
+                    {selectionBox && (
+                        <Rect
+                            x={selectionBox.x}
+                            y={selectionBox.y}
+                            width={selectionBox.width}
+                            height={selectionBox.height}
+                            fill="rgba(52, 152, 219, 0.2)"
+                            stroke="#3498db"
+                            strokeWidth={1}
+                            listening={false}
                         />
                     )}
+
+                    <Transformer
+                        ref={transformerRef}
+                        boundBoxFunc={(oldBox, newBox) => {
+                            if (newBox.width < 5 || newBox.height < 5) {
+                                return oldBox;
+                            }
+                            return newBox;
+                        }}
+                    />
                 </Layer>
-            </Stage>
+            </Stage >
         </div >
     );
 };

@@ -1,0 +1,11 @@
+node_modules
+dist
+storyboard.db
+uploads
+*.db-journal
+*.db-shm
+*.db-wal
+.git
+.gitignore
+.vscode
+.gemini

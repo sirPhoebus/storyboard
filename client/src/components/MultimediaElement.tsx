@@ -11,10 +11,12 @@ interface MultimediaElementProps {
     height?: number;
     url: string;
     draggable?: boolean;
+    onDragStart?: (e: any) => void;
+    onDragMove?: (e: any) => void;
     onDragEnd?: (e: any) => void;
     onTransformEnd?: (e: any) => void;
     isSelected?: boolean;
-    onClick?: () => void;
+    onClick?: (e: any) => void;
     // Video controls
     isPlaying?: boolean;
     isMuted?: boolean;
@@ -28,6 +30,8 @@ const MultimediaElement = forwardRef<any, MultimediaElementProps>(({
     width = 200,
     height = 150,
     draggable,
+    onDragStart,
+    onDragMove,
     onDragEnd,
     onTransformEnd,
     isSelected,
@@ -35,7 +39,7 @@ const MultimediaElement = forwardRef<any, MultimediaElementProps>(({
     isPlaying = true, // Default to auto-play for now, or controllable
     isMuted = true,
 }, ref) => {
-    const [image] = useImage(url);
+    const [image] = useImage(url, 'anonymous');
     const videoRef = useRef<HTMLVideoElement | null>(null);
     const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
     const imageRef = useRef<any>(null);
@@ -86,6 +90,8 @@ const MultimediaElement = forwardRef<any, MultimediaElementProps>(({
                 stroke={isSelected ? '#3498db' : undefined}
                 strokeWidth={isSelected ? 4 : 0}
                 draggable={draggable}
+                onDragStart={onDragStart}
+                onDragMove={onDragMove}
                 onDragEnd={onDragEnd}
                 onTransformEnd={onTransformEnd}
                 onClick={onClick}
@@ -104,6 +110,8 @@ const MultimediaElement = forwardRef<any, MultimediaElementProps>(({
             stroke={isSelected ? '#3498db' : undefined}
             strokeWidth={isSelected ? 4 : 0}
             draggable={draggable}
+            onDragStart={onDragStart}
+            onDragMove={onDragMove}
             onDragEnd={onDragEnd}
             onTransformEnd={onTransformEnd}
             onClick={onClick}

@@ -1,4 +1,6 @@
 import React from 'react';
+import { API_BASE_URL } from '../config';
+
 
 interface Page {
     id: string;
@@ -6,7 +8,18 @@ interface Page {
     thumbnail?: string;
 }
 
+interface Chapter {
+    id: string;
+    title: string;
+}
+
 interface SidebarProps {
+    chapters: Chapter[];
+    currentChapterId: string | null;
+    onSelectChapter: (id: string) => void;
+    onAddChapter: () => void;
+    onDeleteChapter: (id: string) => void;
+
     pages: Page[];
     currentPageId: string | null;
     onSelectPage: (id: string) => void;
@@ -17,37 +30,26 @@ interface SidebarProps {
     onRefresh?: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ pages, currentPageId, onSelectPage, onAddPage, onRenamePage, isCollapsed, onToggle, onRefresh }) => {
+const Sidebar: React.FC<SidebarProps> = ({
+    chapters, currentChapterId, onSelectChapter, onAddChapter, onDeleteChapter,
+    pages, currentPageId, onSelectPage, onAddPage, onRenamePage, isCollapsed, onToggle, onRefresh
+}) => {
     const [editingPageId, setEditingPageId] = React.useState<string | null>(null);
     const [editTitle, setEditTitle] = React.useState('');
-    const [searchQuery, setSearchQuery] = React.useState('');
-    const [searchResults, setSearchResults] = React.useState<any[]>([]);
     const [draggedPageId, setDraggedPageId] = React.useState<string | null>(null);
     const [pageToDelete, setPageToDelete] = React.useState<string | null>(null);
+    const [pageToDuplicate, setPageToDuplicate] = React.useState<string | null>(null);
 
-    const handleSearch = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!searchQuery.trim()) return;
-        const res = await fetch(`http://localhost:5000/api/search?q=${encodeURIComponent(searchQuery)}`);
-        const data = await res.json();
-        setSearchResults(data);
-    };
+    const confirmDuplicatePage = async () => {
+        if (!pageToDuplicate) return;
+        await fetch(`${API_BASE_URL}/api/pages/duplicate`, {
 
-    const handleDuplicatePage = async (pageId: string, e: React.MouseEvent) => {
-        e.stopPropagation();
-        await fetch('http://localhost:5000/api/pages/duplicate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pageId })
+            body: JSON.stringify({ pageId: pageToDuplicate })
         });
-        // We need a way to refresh pages list. Assuming parent passes updated pages or we trigger refresh?
-        // Parent component currently fetches pages. We should probably accept an `onRefresh` prop or similar?
-        // OR simpler: `onAddPage` triggers refresh in parent. We can repurpose `onAddPage` or generic `onUpdate`.
-        // Let's assume onAddPage refreshes everything for now? No, that just adds default.
-        // We probably need `onPagesUpdate` prop.
-        // For prototype, simply reloading page works but is bad UX.
-        // Better: Pass a refresh callback.
-        // **Compromise**: I will add `onRefresh` prop to SidebarProps.
+        setPageToDuplicate(null);
+        onRefresh && onRefresh();
     };
 
     const handleMovePage = async (pageId: string, direction: 'up' | 'down', e: React.MouseEvent) => {
@@ -61,11 +63,12 @@ const Sidebar: React.FC<SidebarProps> = ({ pages, currentPageId, onSelectPage, o
         const swapIndex = direction === 'up' ? index - 1 : index + 1;
         [newPages[index], newPages[swapIndex]] = [newPages[swapIndex], newPages[index]];
 
-        await fetch('http://localhost:5000/api/pages/reorder', {
+        await fetch(`${API_BASE_URL}/api/pages/reorder`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ order: newPages.map(p => p.id) })
         });
+
         onRefresh && onRefresh();
     };
 
@@ -92,14 +95,12 @@ const Sidebar: React.FC<SidebarProps> = ({ pages, currentPageId, onSelectPage, o
         const [draggedItem] = newPages.splice(originalIndex, 1);
         newPages.splice(targetIndex, 0, draggedItem);
 
-        // Optimistic UI update could happen here if we had state control, but relying on refresh is safer for now
-        // actually we don't control 'pages' state here, so optimistic update needs `onRefresh` to be fast or parent to update.
-
-        await fetch('http://localhost:5000/api/pages/reorder', {
+        await fetch(`${API_BASE_URL}/api/pages/reorder`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ order: newPages.map(p => p.id) })
         });
+
 
         setDraggedPageId(null);
         onRefresh && onRefresh();
@@ -107,7 +108,8 @@ const Sidebar: React.FC<SidebarProps> = ({ pages, currentPageId, onSelectPage, o
 
     const confirmDeletePage = async () => {
         if (!pageToDelete) return;
-        await fetch(`http://localhost:5000/api/pages/${pageToDelete}`, {
+        await fetch(`${API_BASE_URL}/api/pages/${pageToDelete}`, {
+
             method: 'DELETE'
         });
         setPageToDelete(null);
@@ -154,16 +156,66 @@ const Sidebar: React.FC<SidebarProps> = ({ pages, currentPageId, onSelectPage, o
                 {isCollapsed ? '≫' : '≪'}
             </button>
 
+            {/* CHAPTERS SECTION */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginTop: '30px' }}>
+                {!isCollapsed && (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <h2 style={{
+                            margin: '0',
+                            fontSize: '14px',
+                            fontWeight: 600,
+                            letterSpacing: '0.05em',
+                            textTransform: 'uppercase',
+                            opacity: 0.6
+                        }}>Chapters</h2>
+                        <button onClick={onAddChapter} style={{ background: 'none', border: 'none', color: 'var(--accent-color)', cursor: 'pointer', fontWeight: 'bold' }}>+</button>
+                    </div>
+                )}
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    {chapters.map(chapter => (
+                        <div
+                            key={chapter.id}
+                            onClick={() => onSelectChapter(chapter.id)}
+                            style={{
+                                padding: '8px 10px',
+                                background: currentChapterId === chapter.id ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
+                                borderLeft: currentChapterId === chapter.id ? '3px solid var(--accent-color)' : '3px solid transparent',
+                                cursor: 'pointer',
+                                fontSize: '14px',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                borderRadius: '0 4px 4px 0'
+                            }}
+                        >
+                            {!isCollapsed && (
+                                <>
+                                    <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{chapter.title}</span>
+                                    <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDeleteChapter(chapter.id); }} style={{ background: 'none', border: 'none', color: '#e74c3c', cursor: 'pointer', opacity: 0.6 }} onMouseEnter={e => e.currentTarget.style.opacity = '1'} onMouseLeave={e => e.currentTarget.style.opacity = '0.6'}>×</button>
+                                </>
+                            )}
+                            {isCollapsed && (
+                                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: currentChapterId === chapter.id ? 'var(--accent-color)' : '#555', margin: '0 auto' }}></div>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            <div style={{ width: '100%', height: '1px', background: 'rgba(255,255,255,0.1)', margin: '5px 0' }}></div>
+
+
             {!isCollapsed && <h2 style={{
-                margin: '0 0 10px 0',
-                fontSize: '18px',
+                margin: '0 0 5px 0',
+                fontSize: '14px',
                 fontWeight: 600,
                 letterSpacing: '0.05em',
                 textTransform: 'uppercase',
-                opacity: 0.8
+                opacity: 0.6
             }}>Pages</h2>}
 
-            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '5px', marginTop: isCollapsed ? '40px' : '0' }}>
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '5px' }}>
                 {pages.map((page, index) => (
                     <div
                         key={page.id}
@@ -261,9 +313,9 @@ const Sidebar: React.FC<SidebarProps> = ({ pages, currentPageId, onSelectPage, o
                                     )}
                                 </div>
                                 <button
-                                    onClick={(e) => { handleDuplicatePage(page.id, e); onRefresh && onRefresh(); }}
+                                    onClick={(e) => { e.stopPropagation(); setPageToDuplicate(page.id); }}
                                     title="Duplicate"
-                                    style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#aaa', fontSize: '12px' }}
+                                    style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#aaa', fontSize: '16px' }}
                                 >
                                     ❐
                                 </button>
@@ -314,6 +366,55 @@ const Sidebar: React.FC<SidebarProps> = ({ pages, currentPageId, onSelectPage, o
                         </button>
                         <button
                             onClick={() => setPageToDelete(null)}
+                            style={{
+                                padding: '8px 16px',
+                                background: '#7f8c8d',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: 'pointer'
+                            }}
+                        >
+                            No
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {pageToDuplicate && (
+                <div style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: '100%',
+                    background: 'rgba(0,0,0,0.8)',
+                    zIndex: 2000,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '20px',
+                    boxSizing: 'border-box',
+                    textAlign: 'center'
+                }}>
+                    <h3 style={{ color: 'white', marginBottom: '20px' }}>Duplicate Page?</h3>
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                        <button
+                            onClick={confirmDuplicatePage}
+                            style={{
+                                padding: '8px 16px',
+                                background: '#3498db',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: 'pointer'
+                            }}
+                        >
+                            Yes
+                        </button>
+                        <button
+                            onClick={() => setPageToDuplicate(null)}
                             style={{
                                 padding: '8px 16px',
                                 background: '#7f8c8d',
