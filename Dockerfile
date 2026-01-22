@@ -1,47 +1,53 @@
 # --- Stage 1: Build the Client ---
 FROM node:20-slim AS client-builder
 WORKDIR /app/client
-
-# Copy only package files first for better caching
 COPY client/package*.json ./
 RUN npm install
-
-# Copy source and build
 COPY client/ ./
 RUN npm run build
 
 # --- Stage 2: Build the Server ---
-FROM node:20-slim
-WORKDIR /app
+FROM node:20-slim AS server-builder
+WORKDIR /app/server
 
-# Install dependencies for better-sqlite3 (native modules)
+# Install dependencies for native-sqlite (native modules)
 RUN apt-get update && apt-get install -y \
     python3 \
     make \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# Setup Server
-WORKDIR /app/server
 COPY server/package*.json ./
 RUN npm install
-
-# Copy server source
 COPY server/ ./
+RUN npm run build
 
-# Setup Client distribution
-WORKDIR /app/client
-COPY --from=client-builder /app/client/dist ./dist
-
-# Create data directory for persistence
+# --- Stage 3: Final Production Image ---
+FROM node:20-slim
 WORKDIR /app
-RUN mkdir -p /app/data
+
+# Install runtime dependencies for better-sqlite3
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy built server
+COPY --from=server-builder /app/server/package*.json ./server/
+COPY --from=server-builder /app/server/node_modules ./server/node_modules
+COPY --from=server-builder /app/server/dist ./server/dist
+
+# Copy built client
+COPY --from=client-builder /app/client/dist ./client/dist
+
+# Environment variables
 ENV DATA_DIR=/app/data
 ENV NODE_ENV=production
+RUN mkdir -p /app/data
 
-# Final environment
 WORKDIR /app/server
 EXPOSE 5000
 
-# Start using ts-node or compile and run (ts-node is easier for this scale)
-CMD ["npx", "ts-node", "index.ts"]
+# Run using standard node
+CMD ["node", "dist/index.js"]
