@@ -1,7 +1,7 @@
 # Using a single-stage build to guarantee binary compatibility
 FROM node:20-bookworm
 
-# 1. Install system dependencies required for compiling native modules (like better-sqlite3)
+# 1. Install system dependencies required for compiling native modules
 RUN apt-get update && apt-get install -y \
     python3 \
     make \
@@ -11,7 +11,6 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # 2. Copy the entire project
-# (Ensure .dockerignore handles skipping local node_modules and big files)
 COPY . .
 
 # 3. Build the Client
@@ -24,7 +23,8 @@ WORKDIR /app/server
 RUN npm install
 # FORCE a rebuild of native modules to match the current Linux environment
 RUN npm rebuild better-sqlite3 --build-from-source
-RUN npx tsc -p tsconfig.json
+# Fix permissions and use npm run build
+RUN chmod -R +x node_modules/.bin && npm run build
 
 # 5. Production setup
 ENV DATA_DIR=/app/data
