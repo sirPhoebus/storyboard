@@ -5,36 +5,19 @@ import MultimediaElement from './MultimediaElement';
 import { API_BASE_URL } from '../config';
 
 
-interface Element {
-    id: string;
-    type: string;
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    fill?: string;
-    stroke?: string;
-    strokeWidth?: number;
-    url?: string;
-    text?: string;
-    points?: number[];
-    start_element_id?: string;
-    end_element_id?: string;
-    group_id?: string;
-    // Text Styling
-    fontSize?: number;
-    fontStyle?: string; // e.g., 'bold italic'
-    // Video State
-    isPlaying?: boolean;
-    isMuted?: boolean;
-}
+import type { Element, Chapter, Page } from '../types';
 
 interface CanvasProps {
     pageId: string | null;
     isSidebarCollapsed: boolean;
+    sidebarWidth: number;
+    chapters: Chapter[];
+    allPages: Page[];
+    onRefreshPages: () => void;
+    onSelectPage: (id: string) => void;
 }
 
-const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
+const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidth, chapters, allPages, onRefreshPages, onSelectPage }) => {
     const socket = useSocket();
 
     const mainButtonStyle = {
@@ -110,6 +93,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
     // Grid & Snapping State
     const [showGrid, setShowGrid] = useState(false);
     const [snapToGrid, setSnapToGrid] = useState(false);
+    const [isMoveMenuOpen, setIsMoveMenuOpen] = useState(false);
     const gridSize = 20;
     // Let's first support "Smart Linking" updates.
 
@@ -321,6 +305,71 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
             if (socket) socket.emit('element:delete', { id });
             updateThumbnail();
         });
+    };
+
+    const handleMoveSelectionToPage = async (targetPageId: string) => {
+        if (!targetPageId || targetPageId === pageId) return;
+
+        const elementsToMove = elements.filter(el => selectedIds.includes(el.id));
+        if (elementsToMove.length === 0) return;
+
+        saveToHistory();
+
+        // 1. Create on target page
+        const createPromises = elementsToMove.map(el => {
+            // Destructure known DB columns to separate them from content properties
+            // Also destructure 'content' to remove the stale object if it exists
+            const {
+                id, pageId: oldPageId, type, x, y, width, height, z_index,
+                group_id, start_element_id, end_element_id,
+                content: staleContent,
+                ...restContent
+            } = el as any;
+
+            // restContent now contains latest state of text, url, points, styling, etc.
+            const newContent = restContent;
+
+            const newElement = {
+                pageId: targetPageId,
+                type,
+                x, y, width, height, z_index, group_id, start_element_id, end_element_id,
+                content: newContent
+            };
+
+            return fetch(`${API_BASE_URL}/api/elements`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(newElement)
+            }).then(res => res.json());
+        });
+
+        await Promise.all(createPromises);
+
+        // 2. Delete from current page
+        const deletePromises = elementsToMove.map(el => {
+            return fetch(`${API_BASE_URL}/api/elements/${el.id}`, {
+                method: 'DELETE'
+            });
+        });
+
+        await Promise.all(deletePromises);
+
+        // 3. Update local state
+        setElements(prev => prev.filter(el => !selectedIds.includes(el.id)));
+
+        // Emit delete events so other clients on this page see them vanish
+        if (socket) {
+            elementsToMove.forEach(el => {
+                socket.emit('element:delete', { id: el.id });
+            });
+        }
+
+        setSelectedIds([]);
+        setIsMoveMenuOpen(false);
+        updateThumbnail();
+
+        // Navigate to target page
+        onSelectPage(targetPageId);
     };
 
     const handleDragStart = () => {
@@ -1007,6 +1056,52 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
                         </>
                     )
                 }
+
+                {selectedIds.length > 0 && (
+                    <div style={{ position: 'relative', marginLeft: '5px' }}>
+                        <button
+                            onClick={() => setIsMoveMenuOpen(!isMoveMenuOpen)}
+                            style={mainButtonStyle}
+                            title="Move selected elements to another page"
+                        >
+                            Move to Page ▾
+                        </button>
+                        {isMoveMenuOpen && (
+                            <div style={{
+                                position: 'absolute',
+                                top: '100%',
+                                right: 0,
+                                marginTop: '5px',
+                                background: '#2c3e50',
+                                border: '1px solid #34495e',
+                                borderRadius: '4px',
+                                padding: '5px',
+                                zIndex: 200,
+                                minWidth: '200px',
+                                boxShadow: '0 4px 6px rgba(0,0,0,0.3)'
+                            }}>
+                                <select
+                                    onChange={(e) => {
+                                        if (e.target.value) {
+                                            handleMoveSelectionToPage(e.target.value);
+                                        }
+                                    }}
+                                    style={{ width: '100%', padding: '6px', background: '#34495e', color: 'white', border: '1px solid #455a64', borderRadius: '3px' }}
+                                    defaultValue=""
+                                >
+                                    <option value="" disabled>Select Destination...</option>
+                                    {chapters.map(chapter => (
+                                        <optgroup key={chapter.id} label={chapter.title}>
+                                            {allPages.filter(p => p.chapter_id === chapter.id && p.id !== pageId).map(page => (
+                                                <option key={page.id} value={page.id}>{page.title}</option>
+                                            ))}
+                                        </optgroup>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
+                    </div>
+                )}
             </div >
 
             {
@@ -1049,7 +1144,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed }) => {
 
             <Stage
                 ref={stageRef}
-                width={window.innerWidth - (isSidebarCollapsed ? 60 : 260)}
+                width={window.innerWidth - (isSidebarCollapsed ? 60 : sidebarWidth)}
                 height={window.innerHeight}
                 onMouseDown={handleStageMouseDown}
                 onMouseMove={handleStageMouseMove}

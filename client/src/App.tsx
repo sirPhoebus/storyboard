@@ -2,15 +2,19 @@ import { useEffect, useState } from 'react'
 import Canvas from './components/Canvas'
 import Sidebar from './components/Sidebar'
 import { API_BASE_URL } from './config'
+import type { Chapter, Page } from './types'
 
 
 /* ... imports */
 function App() {
-  const [chapters, setChapters] = useState<any[]>([]);
+  const [chapters, setChapters] = useState<Chapter[]>([]);
   const [currentChapterId, setCurrentChapterId] = useState<string | null>(null);
-  const [pages, setPages] = useState<any[]>([]);
+  const [allPages, setAllPages] = useState<Page[]>([]);
   const [currentPageId, setCurrentPageId] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(260);
+
+  const pages = allPages.filter(p => p.chapter_id === currentChapterId);
 
   // Fetch Chapters
   const fetchChapters = () => {
@@ -34,18 +38,18 @@ function App() {
 
     let url = `${API_BASE_URL}/api/pages`;
 
-    if (currentChapterId) {
-      url += `?chapterId=${currentChapterId}`;
-    }
+    // if (currentChapterId) {
+    //   url += `?chapterId=${currentChapterId}`;
+    // }
 
     fetch(url)
       .then(res => res.json())
       .then(data => {
-        setPages(data);
+        setAllPages(data);
         if (data.length > 0) {
-          // Only change page if current page isn't in the list?
+          const firstPageInChapter = data.find((p: any) => p.chapter_id === currentChapterId);
           if (!currentPageId || !data.find((p: any) => p.id === currentPageId)) {
-            setCurrentPageId(data[0].id);
+            setCurrentPageId(firstPageInChapter ? firstPageInChapter.id : data[0].id);
           }
         } else {
           setCurrentPageId(null);
@@ -55,13 +59,38 @@ function App() {
 
   useEffect(() => {
     fetchChapters();
+    fetchPages(); // Fetch all initially
   }, []);
 
   useEffect(() => {
-    if (currentChapterId) {
-      fetchPages();
+    if (currentChapterId && allPages.length > 0) {
+      // Find the first page of the selected chapter
+      const firstPageInChapter = allPages.find((p: any) => p.chapter_id === currentChapterId);
+
+      // Check if the current page is already in the selected chapter
+      const isCurrentPageInChapter = allPages.find(p => p.id === currentPageId && p.chapter_id === currentChapterId);
+
+      // Only switch if we are NOT already on a page belonging to this chapter
+      if (!isCurrentPageInChapter) {
+        if (firstPageInChapter) {
+          setCurrentPageId(firstPageInChapter.id);
+        } else {
+          setCurrentPageId(null);
+        }
+      }
     }
-  }, [currentChapterId]);
+  }, [currentChapterId, allPages, currentPageId]);
+
+  const handlePageSelection = (pageId: string) => {
+    // Find the page to discover its chapter
+    const page = allPages.find(p => p.id === pageId);
+    if (page) {
+      if (page.chapter_id !== currentChapterId) {
+        setCurrentChapterId(page.chapter_id);
+      }
+      setCurrentPageId(pageId);
+    }
+  };
 
   const handleAddChapter = () => {
     fetch(`${API_BASE_URL}/api/chapters`, {
@@ -74,11 +103,12 @@ function App() {
       .then(newChapter => {
         setChapters([...chapters, newChapter]);
         setCurrentChapterId(newChapter.id);
+        fetchPages(); // Refresh pages to get the auto-created one
       });
   }
 
   const handleDeleteChapter = (chapterId: string) => {
-    if (!window.confirm('Delete chapter and all its pages?')) return;
+    // Confirmation handled in UI
     fetch(`${API_BASE_URL}/api/chapters/${chapterId}`, {
 
       method: 'DELETE'
@@ -97,6 +127,17 @@ function App() {
       .catch(err => console.error(err));
   };
 
+  const handleRenameChapter = (id: string, newTitle: string) => {
+    fetch(`${API_BASE_URL}/api/chapters/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: newTitle })
+    })
+      .then(res => res.json())
+      .then(() => {
+        setChapters(chapters.map(c => c.id === id ? { ...c, title: newTitle } : c));
+      });
+  };
 
 
   const handleAddPage = () => {
@@ -112,7 +153,7 @@ function App() {
     })
       .then(res => res.json())
       .then(newPage => {
-        setPages([...pages, newPage]);
+        setAllPages([...allPages, newPage]);
         setCurrentPageId(newPage.id);
       });
   };
@@ -126,7 +167,7 @@ function App() {
     })
       .then(res => res.json())
       .then(() => {
-        setPages(pages.map(p => p.id === id ? { ...p, title: newTitle } : p));
+        setAllPages(allPages.map(p => p.id === id ? { ...p, title: newTitle } : p));
       });
   };
 
@@ -138,6 +179,7 @@ function App() {
         onSelectChapter={setCurrentChapterId}
         onAddChapter={handleAddChapter}
         onDeleteChapter={handleDeleteChapter}
+        onRenameChapter={handleRenameChapter}
         pages={pages}
         currentPageId={currentPageId}
         onSelectPage={setCurrentPageId}
@@ -146,10 +188,17 @@ function App() {
         isCollapsed={isSidebarCollapsed}
         onToggle={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
         onRefresh={fetchPages}
+        width={sidebarWidth}
+        onWidthChange={setSidebarWidth}
       />
       <Canvas
         pageId={currentPageId}
         isSidebarCollapsed={isSidebarCollapsed}
+        sidebarWidth={sidebarWidth}
+        chapters={chapters}
+        allPages={allPages}
+        onRefreshPages={fetchPages}
+        onSelectPage={handlePageSelection}
       />
     </div>
   )

@@ -81,6 +81,16 @@ app.post('/api/chapters', (req: any, res: any) => {
     }
 });
 
+app.patch('/api/chapters/:id', (req: any, res: any) => {
+    const { title } = req.body;
+    try {
+        db.prepare('UPDATE chapters SET title = ? WHERE id = ?').run(title, req.params.id);
+        res.json({ success: true });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.delete('/api/chapters/:id', (req: any, res: any) => {
     const chapterId = req.params.id;
     const transaction = db.transaction(() => {
@@ -207,6 +217,43 @@ app.put('/api/pages/reorder', (req: any, res: any) => {
     });
     transaction(order);
     res.json({ success: true });
+});
+
+app.post('/api/elements/move', (req: any, res: any) => {
+    const { elementIds, targetPageId } = req.body;
+    if (!elementIds || !targetPageId) return res.status(400).json({ error: 'elementIds and targetPageId required' });
+
+    try {
+        const moveElements = db.transaction(() => {
+            // Get current pages of elements to emit delete events
+            const elements = db.prepare(`SELECT id, page_id FROM elements WHERE id IN (${elementIds.map(() => '?').join(',')})`).all(...elementIds) as { id: string, page_id: string }[];
+
+            // Update page_id
+            db.prepare(`UPDATE elements SET page_id = ? WHERE id IN (${elementIds.map(() => '?').join(',')})`).run(targetPageId, ...elementIds);
+
+            return elements;
+        });
+
+        const movedElements = moveElements();
+
+        // Broadcast move (delete from old pages, add to new page)
+        movedElements.forEach((el: { id: string, page_id: string }) => {
+            io.emit('element:delete', { id: el.id, pageId: el.page_id });
+            // Fetch updated element with content for add event
+            const updatedEl = db.prepare('SELECT * FROM elements WHERE id = ?').get(el.id) as any;
+            if (updatedEl) {
+                io.emit('element:add', {
+                    ...updatedEl,
+                    pageId: targetPageId,
+                    content: JSON.parse(updatedEl.content)
+                });
+            }
+        });
+
+        res.json({ success: true });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.get('/api/search', (req: any, res: any) => {

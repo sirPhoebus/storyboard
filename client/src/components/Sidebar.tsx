@@ -1,17 +1,8 @@
 import React from 'react';
 import { API_BASE_URL } from '../config';
+import type { Page, Chapter } from '../types';
+import { Clapperboard } from 'lucide-react';
 
-
-interface Page {
-    id: string;
-    title: string;
-    thumbnail?: string;
-}
-
-interface Chapter {
-    id: string;
-    title: string;
-}
 
 interface SidebarProps {
     chapters: Chapter[];
@@ -19,6 +10,7 @@ interface SidebarProps {
     onSelectChapter: (id: string) => void;
     onAddChapter: () => void;
     onDeleteChapter: (id: string) => void;
+    onRenameChapter: (id: string, newTitle: string) => void;
 
     pages: Page[];
     currentPageId: string | null;
@@ -28,17 +20,56 @@ interface SidebarProps {
     isCollapsed: boolean;
     onToggle: () => void;
     onRefresh?: () => void;
+    width: number;
+    onWidthChange: (width: number) => void;
 }
-
 const Sidebar: React.FC<SidebarProps> = ({
-    chapters, currentChapterId, onSelectChapter, onAddChapter, onDeleteChapter,
-    pages, currentPageId, onSelectPage, onAddPage, onRenamePage, isCollapsed, onToggle, onRefresh
+    chapters, currentChapterId, onSelectChapter, onAddChapter, onDeleteChapter, onRenameChapter,
+    pages, currentPageId, onSelectPage, onAddPage, onRenamePage, isCollapsed, onToggle, onRefresh,
+    width, onWidthChange
 }) => {
+    const [isResizing, setIsResizing] = React.useState(false);
+
+    const startResizing = React.useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        setIsResizing(true);
+    }, []);
+
+    const stopResizing = React.useCallback(() => {
+        setIsResizing(false);
+    }, []);
+
+    const resize = React.useCallback((e: MouseEvent) => {
+        if (isResizing) {
+            const newWidth = e.clientX;
+            if (newWidth >= 150 && newWidth <= 600) {
+                onWidthChange(newWidth);
+            }
+        }
+    }, [isResizing, onWidthChange]);
+
+    React.useEffect(() => {
+        if (isResizing) {
+            window.addEventListener('mousemove', resize);
+            window.addEventListener('mouseup', stopResizing);
+        } else {
+            window.removeEventListener('mousemove', resize);
+            window.removeEventListener('mouseup', stopResizing);
+        }
+        return () => {
+            window.removeEventListener('mousemove', resize);
+            window.removeEventListener('mouseup', stopResizing);
+        };
+    }, [isResizing, resize, stopResizing]);
+
+    const [editingChapterId, setEditingChapterId] = React.useState<string | null>(null);
+    const [editChapterTitle, setEditChapterTitle] = React.useState('');
     const [editingPageId, setEditingPageId] = React.useState<string | null>(null);
     const [editTitle, setEditTitle] = React.useState('');
     const [draggedPageId, setDraggedPageId] = React.useState<string | null>(null);
     const [pageToDelete, setPageToDelete] = React.useState<string | null>(null);
     const [pageToDuplicate, setPageToDuplicate] = React.useState<string | null>(null);
+    const [chapterToDelete, setChapterToDelete] = React.useState<string | null>(null);
 
     const confirmDuplicatePage = async () => {
         if (!pageToDuplicate) return;
@@ -116,10 +147,16 @@ const Sidebar: React.FC<SidebarProps> = ({
         onRefresh && onRefresh();
     };
 
+    const confirmDeleteChapter = () => {
+        if (!chapterToDelete) return;
+        onDeleteChapter(chapterToDelete);
+        setChapterToDelete(null);
+    };
+
 
     return (
         <div style={{
-            width: isCollapsed ? '60px' : '260px',
+            width: isCollapsed ? '60px' : `${width}px`,
             height: '100vh',
             background: 'var(--sidebar-bg)',
             backdropFilter: 'blur(20px)',
@@ -129,12 +166,30 @@ const Sidebar: React.FC<SidebarProps> = ({
             display: 'flex',
             flexDirection: 'column',
             gap: '15px',
-            transition: 'width var(--transition-speed) ease',
+            transition: isResizing ? 'none' : 'width var(--transition-speed) ease',
             position: 'relative',
             overflow: 'hidden',
             borderRight: '1px solid var(--border-color)',
             zIndex: 1000
         }}>
+            {!isCollapsed && (
+                <div
+                    onMouseDown={startResizing}
+                    style={{
+                        position: 'absolute',
+                        right: 0,
+                        top: 0,
+                        bottom: 0,
+                        width: '4px',
+                        cursor: 'col-resize',
+                        zIndex: 1001,
+                        background: isResizing ? 'var(--accent-color)' : 'transparent',
+                        transition: 'background 0.2s'
+                    }}
+                    onMouseEnter={e => !isResizing && (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
+                    onMouseLeave={e => !isResizing && (e.currentTarget.style.background = 'transparent')}
+                />
+            )}
             <button
                 onClick={onToggle}
                 style={{
@@ -156,6 +211,28 @@ const Sidebar: React.FC<SidebarProps> = ({
                 {isCollapsed ? '≫' : '≪'}
             </button>
 
+            {/* APP TITLE */}
+            <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                marginBottom: '10px',
+                padding: isCollapsed ? '0' : '0 5px',
+                justifyContent: isCollapsed ? 'center' : 'flex-start',
+                minHeight: '24px'
+            }}>
+                <Clapperboard size={24} color="var(--accent-color)" />
+                {!isCollapsed && (
+                    <h1 style={{
+                        margin: 0,
+                        fontSize: '18px',
+                        fontWeight: 700,
+                        letterSpacing: '-0.02em',
+                        color: 'white'
+                    }}>Storyboard</h1>
+                )}
+            </div>
+
             {/* CHAPTERS SECTION */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginTop: '30px' }}>
                 {!isCollapsed && (
@@ -176,7 +253,13 @@ const Sidebar: React.FC<SidebarProps> = ({
                     {chapters.map(chapter => (
                         <div
                             key={chapter.id}
-                            onClick={() => onSelectChapter(chapter.id)}
+                            onClick={() => !editingChapterId && onSelectChapter(chapter.id)}
+                            onDoubleClick={() => {
+                                if (!isCollapsed) {
+                                    setEditingChapterId(chapter.id);
+                                    setEditChapterTitle(chapter.title);
+                                }
+                            }}
                             style={{
                                 padding: '8px 10px',
                                 background: currentChapterId === chapter.id ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
@@ -191,8 +274,43 @@ const Sidebar: React.FC<SidebarProps> = ({
                         >
                             {!isCollapsed && (
                                 <>
-                                    <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{chapter.title}</span>
-                                    <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDeleteChapter(chapter.id); }} style={{ background: 'none', border: 'none', color: '#e74c3c', cursor: 'pointer', opacity: 0.6 }} onMouseEnter={e => e.currentTarget.style.opacity = '1'} onMouseLeave={e => e.currentTarget.style.opacity = '0.6'}>×</button>
+                                    {editingChapterId === chapter.id ? (
+                                        <input
+                                            autoFocus
+                                            value={editChapterTitle}
+                                            onChange={(e) => setEditChapterTitle(e.target.value)}
+                                            onBlur={() => {
+                                                if (editChapterTitle.trim() && editChapterTitle !== chapter.title) {
+                                                    onRenameChapter(chapter.id, editChapterTitle);
+                                                }
+                                                setEditingChapterId(null);
+                                            }}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                    if (editChapterTitle.trim() && editChapterTitle !== chapter.title) {
+                                                        onRenameChapter(chapter.id, editChapterTitle);
+                                                    }
+                                                    setEditingChapterId(null);
+                                                } else if (e.key === 'Escape') {
+                                                    setEditingChapterId(null);
+                                                }
+                                            }}
+                                            style={{
+                                                flex: 1,
+                                                background: 'transparent',
+                                                border: 'none',
+                                                color: 'white',
+                                                outline: 'none',
+                                                fontSize: 'inherit',
+                                                padding: '0'
+                                            }}
+                                        />
+                                    ) : (
+                                        <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{chapter.title}</span>
+                                    )}
+                                    {!editingChapterId && (
+                                        <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); setChapterToDelete(chapter.id); }} style={{ background: 'none', border: 'none', color: '#e74c3c', cursor: 'pointer', opacity: 0.6 }} title="Delete Chapter" onMouseEnter={e => e.currentTarget.style.opacity = '1'} onMouseLeave={e => e.currentTarget.style.opacity = '0.6'}>×</button>
+                                    )}
                                 </>
                             )}
                             {isCollapsed && (
@@ -415,6 +533,56 @@ const Sidebar: React.FC<SidebarProps> = ({
                         </button>
                         <button
                             onClick={() => setPageToDuplicate(null)}
+                            style={{
+                                padding: '8px 16px',
+                                background: '#7f8c8d',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: 'pointer'
+                            }}
+                        >
+                            No
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {chapterToDelete && (
+                <div style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: '100%',
+                    background: 'rgba(0,0,0,0.8)',
+                    zIndex: 2000,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '20px',
+                    boxSizing: 'border-box',
+                    textAlign: 'center'
+                }}>
+                    <h3 style={{ color: 'white', marginBottom: '20px', fontSize: '1.2em' }}>Delete Chapter?</h3>
+                    <p style={{ color: '#aaa', fontSize: '0.9em', marginBottom: '20px' }}>This will delete all pages in this chapter.</p>
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                        <button
+                            onClick={confirmDeleteChapter}
+                            style={{
+                                padding: '8px 16px',
+                                background: '#e74c3c',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: 'pointer'
+                            }}
+                        >
+                            Yes
+                        </button>
+                        <button
+                            onClick={() => setChapterToDelete(null)}
                             style={{
                                 padding: '8px 16px',
                                 background: '#7f8c8d',
