@@ -407,7 +407,7 @@ io.on('connection', (socket: any) => {
 if (process.env.NODE_ENV === 'production') {
     const clientDistPath = path.join(process.cwd(), '..', 'client', 'dist');
     app.use(express.static(clientDistPath));
-    app.get('*', (req, res) => {
+    app.get('(.*)', (req, res) => {
         res.sendFile(path.join(clientDistPath, 'index.html'));
     });
 }
