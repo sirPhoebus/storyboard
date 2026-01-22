@@ -10,12 +10,11 @@ interface CanvasProps {
     sidebarWidth: number;
     chapters: Chapter[];
     allPages: Page[];
-    onRefreshPages: () => void;
     onSelectPage: (id: string) => void;
     socket: any;
 }
 
-const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidth, chapters, allPages, onRefreshPages, onSelectPage, socket }) => {
+const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidth, chapters, allPages, onSelectPage, socket }) => {
 
     const mainButtonStyle = {
         padding: '8px 12px',

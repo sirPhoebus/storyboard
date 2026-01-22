@@ -212,7 +212,6 @@ function App() {
         sidebarWidth={sidebarWidth}
         chapters={chapters}
         allPages={allPages}
-        onRefreshPages={fetchPages}
         onSelectPage={handlePageSelection}
         socket={socket}
       />
