@@ -191,37 +191,46 @@ const Sidebar: React.FC<SidebarProps> = ({
                     onMouseLeave={e => !isResizing && (e.currentTarget.style.background = 'transparent')}
                 />
             )}
-            <button
-                onClick={onToggle}
-                style={{
-                    position: 'absolute',
-                    top: '15px',
-                    right: isCollapsed ? '18px' : '15px',
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'var(--text-color)',
-                    cursor: 'pointer',
-                    fontSize: '20px',
-                    zIndex: 10,
-                    opacity: 0.6,
-                    transition: 'opacity 0.2s'
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
-                onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.6')}
-            >
-                {isCollapsed ? '≫' : '≪'}
-            </button>
+            {!isCollapsed && (
+                <button
+                    onClick={onToggle}
+                    style={{
+                        position: 'absolute',
+                        top: '15px',
+                        right: '15px',
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--text-color)',
+                        cursor: 'pointer',
+                        fontSize: '20px',
+                        zIndex: 10,
+                        opacity: 0.6,
+                        transition: 'opacity 0.2s'
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
+                    onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.6')}
+                >
+                    ≪
+                </button>
+            )}
 
             {/* APP TITLE */}
-            <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '12px',
-                marginBottom: '10px',
-                padding: isCollapsed ? '0' : '0 5px',
-                justifyContent: isCollapsed ? 'center' : 'flex-start',
-                minHeight: '24px'
-            }}>
+            <div
+                onClick={isCollapsed ? onToggle : undefined}
+                style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    marginBottom: '10px',
+                    padding: isCollapsed ? '0' : '0 5px',
+                    justifyContent: isCollapsed ? 'center' : 'flex-start',
+                    minHeight: '24px',
+                    cursor: isCollapsed ? 'pointer' : 'default',
+                    transition: 'transform 0.2s'
+                }}
+                onMouseEnter={(e) => isCollapsed && (e.currentTarget.style.transform = 'scale(1.1)')}
+                onMouseLeave={(e) => isCollapsed && (e.currentTarget.style.transform = 'scale(1)')}
+            >
                 <Clapperboard size={24} color="var(--accent-color)" />
                 {!isCollapsed && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -232,34 +241,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                             letterSpacing: '-0.02em',
                             color: 'white'
                         }}>Storyboard</h1>
-                        <div style={{
-                            padding: '2px 6px',
-                            background: 'rgba(52, 152, 219, 0.2)',
-                            borderRadius: '10px',
-                            fontSize: '10px',
-                            color: 'var(--accent-color)',
-                            fontWeight: 600,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            border: '1px solid rgba(52, 152, 219, 0.3)'
-                        }}>
-                            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#2ecc71' }}></span>
-                            {connectedUsers}
-                        </div>
-                    </div>
-                )}
-                {isCollapsed && (
-                    <div style={{
-                        position: 'absolute',
-                        top: '10px',
-                        left: '50%',
-                        transform: 'translateX(-50%)',
-                        fontSize: '10px',
-                        color: '#2ecc71',
-                        fontWeight: 'bold'
-                    }}>
-                        {connectedUsers}
                     </div>
                 )}
             </div>
@@ -355,14 +336,37 @@ const Sidebar: React.FC<SidebarProps> = ({
             <div style={{ width: '100%', height: '1px', background: 'rgba(255,255,255,0.1)', margin: '5px 0' }}></div>
 
 
-            {!isCollapsed && <h2 style={{
-                margin: '0 0 5px 0',
-                fontSize: '14px',
-                fontWeight: 600,
-                letterSpacing: '0.05em',
-                textTransform: 'uppercase',
-                opacity: 0.6
-            }}>Pages</h2>}
+            {!isCollapsed ? (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                    <h2 style={{
+                        margin: '0',
+                        fontSize: '14px',
+                        fontWeight: 600,
+                        letterSpacing: '0.05em',
+                        textTransform: 'uppercase',
+                        opacity: 0.6
+                    }}>Pages</h2>
+                    <button onClick={onAddPage} style={{ background: 'none', border: 'none', color: 'var(--accent-color)', cursor: 'pointer', fontWeight: 'bold', fontSize: '18px' }}>+</button>
+                </div>
+            ) : (
+                <button
+                    onClick={onAddPage}
+                    style={{
+                        background: 'none',
+                        border: 'none',
+                        color: 'var(--accent-color)',
+                        cursor: 'pointer',
+                        fontWeight: 'bold',
+                        fontSize: '18px',
+                        marginBottom: '10px',
+                        width: '100%',
+                        textAlign: 'center'
+                    }}
+                    title="Add Page"
+                >
+                    +
+                </button>
+            )}
 
             <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '5px' }}>
                 {pages.map((page, index) => (
@@ -629,52 +633,37 @@ const Sidebar: React.FC<SidebarProps> = ({
                 </div>
             )}
 
-            {!isCollapsed && (
-                <button
-                    onClick={onAddPage}
-                    style={{
-                        padding: '12px',
-                        background: 'transparent',
-                        border: '1px solid var(--border-color)',
+            <div style={{
+                marginTop: 'auto',
+                padding: '10px 0',
+                borderTop: '1px solid var(--border-color)',
+                display: 'flex',
+                justifyContent: isCollapsed ? 'center' : 'flex-start',
+                alignItems: 'center',
+                minHeight: '40px'
+            }}>
+                {!isCollapsed ? (
+                    <div style={{
+                        fontSize: '12px',
                         color: 'var(--text-color)',
-                        cursor: 'pointer',
-                        borderRadius: '6px',
-                        marginTop: 'auto',
-                        fontSize: '14px',
-                        fontWeight: 500,
-                        transition: 'all 0.2s'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                >
-                    Add Page
-                </button>
-            )}
-            {isCollapsed && (
-                <button
-                    onClick={onAddPage}
-                    title="Add Page"
-                    style={{
-                        width: '40px',
-                        height: '40px',
-                        background: 'transparent',
-                        border: '1px solid var(--border-color)',
-                        color: 'var(--text-color)',
-                        cursor: 'pointer',
-                        borderRadius: '50%',
-                        fontSize: '20px',
+                        opacity: 0.7,
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'center',
-                        marginTop: 'auto',
-                        transition: 'all 0.2s'
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.color = 'white')}
-                    onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-color)')}
-                >
-                    +
-                </button>
-            )}
+                        gap: '6px'
+                    }}>
+                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#2ecc71' }}></span>
+                        viewer(s) : {connectedUsers}
+                    </div>
+                ) : (
+                    <div style={{
+                        fontSize: '12px',
+                        color: '#2ecc71',
+                        fontWeight: 'bold'
+                    }}>
+                        {connectedUsers}
+                    </div>
+                )}
+            </div>
         </div>
     );
 };

@@ -14,6 +14,14 @@ interface CanvasProps {
     socket: any;
 }
 
+interface UploadState {
+    id: string;
+    fileName: string;
+    progress: number;
+    status: 'uploading' | 'processing' | 'completed' | 'error';
+    error?: string;
+}
+
 const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidth, chapters, allPages, onSelectPage, socket }) => {
 
     const mainButtonStyle = {
@@ -90,12 +98,22 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     const [showGrid, setShowGrid] = useState(false);
     const [snapToGrid, setSnapToGrid] = useState(false);
     const [isMoveMenuOpen, setIsMoveMenuOpen] = useState(false);
+    const [uploadsInProgress, setUploadsInProgress] = useState<UploadState[]>([]);
     const gridSize = 20;
     // Let's first support "Smart Linking" updates.
 
     const saveToHistory = () => {
         setHistory(prev => [...prev.slice(-19), elements]);
         setRedoStack([]);
+    };
+
+    const thumbnailTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const updateThumbnailDebounced = () => {
+        if (thumbnailTimeoutRef.current) clearTimeout(thumbnailTimeoutRef.current);
+        thumbnailTimeoutRef.current = setTimeout(() => {
+            updateThumbnail();
+            thumbnailTimeoutRef.current = null;
+        }, 1000); // 1 second debounce
     };
 
     useEffect(() => {
@@ -244,7 +262,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                             .then(data => {
                                 // Element will be added via socket broadcast
                                 setSelectedId(data.id); // Select the new item
-                                updateThumbnail();
+                                updateThumbnailDebounced();
                             });
                     }
                 }
@@ -262,7 +280,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         setRedoStack(prev => [elements, ...prev]);
         setHistory(newHistory);
         setElements(previous);
-        updateThumbnail();
+        updateThumbnailDebounced();
     };
 
     const handleRedo = () => {
@@ -272,7 +290,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         setHistory(prev => [...prev, elements]);
         setRedoStack(newRedoStack);
         setElements(next);
-        updateThumbnail();
+        updateThumbnailDebounced();
     };
 
     const updateThumbnail = () => {
@@ -299,7 +317,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             setElements(prev => prev.filter(el => el.id !== id));
             setSelectedId(null);
             if (socket) socket.emit('element:delete', { id });
-            updateThumbnail();
+            updateThumbnailDebounced();
         });
     };
 
@@ -362,7 +380,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
 
         setSelectedIds([]);
         setIsMoveMenuOpen(false);
-        updateThumbnail();
+        updateThumbnailDebounced();
 
         // Navigate to target page
         onSelectPage(targetPageId);
@@ -563,7 +581,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             });
         }
 
-        updateThumbnail();
+        updateThumbnailDebounced();
     };
 
     const handleTransformEnd = (id: string, node: any) => {
@@ -636,7 +654,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 });
             }
         }
-        updateThumbnail();
+        updateThumbnailDebounced();
     };
 
     const handleArrowPointDrag = (id: string, pointIndex: number, x: number, y: number) => {
@@ -656,7 +674,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         if (element && socket) {
             socket.emit('element:update', { id, content: { points: element.points } });
         }
-        updateThumbnail();
+        updateThumbnailDebounced();
     };
 
     const handleAddZone = () => {
@@ -680,7 +698,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             .then(res => res.json())
             .then(() => {
                 // Element will be added via socket broadcast
-                updateThumbnail();
+                updateThumbnailDebounced();
             });
     };
 
@@ -704,7 +722,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             .then(res => res.json())
             .then(() => {
                 // Element will be added via socket broadcast
-                updateThumbnail();
+                updateThumbnailDebounced();
             });
     };
 
@@ -712,7 +730,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         saveToHistory();
         setElements(prev => prev.map(el => (el.id === id ? { ...el, text } : el)));
         if (socket) socket.emit('element:update', { id, content: { text } });
-        updateThumbnail();
+        updateThumbnailDebounced();
     };
 
     const handleAddArrow = () => {
@@ -737,7 +755,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             .then(res => res.json())
             .then(() => {
                 // Element will be added via socket broadcast
-                updateThumbnail();
+                updateThumbnailDebounced();
             });
     };
 
@@ -746,16 +764,53 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         if (!files || files.length === 0 || !pageId) return;
         saveToHistory();
 
-        const uploads = Array.from(files).map(async (file) => {
-            const formData = new FormData();
-            formData.append('file', file);
-            try {
-                const uploadRes = await fetch(`${API_BASE_URL}/api/upload`, {
+        const fileList = Array.from(files);
 
-                    method: 'POST',
-                    body: formData,
+        const uploadPromises = fileList.map(async (file) => {
+            const uploadId = crypto.randomUUID();
+            const newUpload: UploadState = {
+                id: uploadId,
+                fileName: file.name,
+                progress: 0,
+                status: 'uploading'
+            };
+
+            setUploadsInProgress(prev => [...prev, newUpload]);
+
+            try {
+                // Use XMLHttpRequest for progress tracking
+                const { url, type } = await new Promise<{ url: string, type: string }>((resolve, reject) => {
+                    const xhr = new XMLHttpRequest();
+                    const formData = new FormData();
+                    formData.append('file', file);
+
+                    xhr.upload.onprogress = (e) => {
+                        if (e.lengthComputable) {
+                            const progress = Math.round((e.loaded / e.total) * 100);
+                            setUploadsInProgress(prev =>
+                                prev.map(u => u.id === uploadId ? { ...u, progress } : u)
+                            );
+                        }
+                    };
+
+                    xhr.onload = () => {
+                        if (xhr.status >= 200 && xhr.status < 300) {
+                            resolve(JSON.parse(xhr.responseText));
+                        } else {
+                            reject(new Error(`Upload failed with status ${xhr.status}`));
+                        }
+                    };
+
+                    xhr.onerror = () => reject(new Error('Network error during upload'));
+
+                    xhr.open('POST', `${API_BASE_URL}/api/upload`);
+                    xhr.send(formData);
                 });
-                const { url, type } = await uploadRes.json();
+
+                setUploadsInProgress(prev =>
+                    prev.map(u => u.id === uploadId ? { ...u, status: 'processing', progress: 100 } : u)
+                );
+
                 const elementType = type.startsWith('video') ? 'video' : 'image';
                 let finalWidth = 400;
                 let finalHeight = 300;
@@ -785,14 +840,30 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                         video.onerror = () => resolve(null);
                     });
                 }
+
+                setUploadsInProgress(prev =>
+                    prev.map(u => u.id === uploadId ? { ...u, status: 'completed' } : u)
+                );
+
+                // Remove from progress list after a delay
+                setTimeout(() => {
+                    setUploadsInProgress(prev => prev.filter(u => u.id !== uploadId));
+                }, 2000);
+
                 return { type: elementType, width: finalWidth, height: finalHeight, url };
             } catch (error) {
                 console.error('Upload failed:', error);
+                setUploadsInProgress(prev =>
+                    prev.map(u => u.id === uploadId ? { ...u, status: 'error', error: 'Upload failed' } : u)
+                );
+                setTimeout(() => {
+                    setUploadsInProgress(prev => prev.filter(u => u.id !== uploadId));
+                }, 5000);
                 return null;
             }
         });
 
-        const results = await Promise.all(uploads);
+        const results = await Promise.all(uploadPromises);
         const validResults = results.filter(Boolean);
 
         let currentX = 100;
@@ -825,7 +896,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 console.error('Failed to create element:', e);
             }
         }
-        updateThumbnail();
+        updateThumbnailDebounced();
         if (fileInputRef.current) fileInputRef.current.value = '';
     };
 
@@ -973,7 +1044,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         saveToHistory();
         setElements(prev => prev.map(el => (el.id === id ? { ...el, ...style } : el)));
         if (socket) socket.emit('element:update', { id, ...style });
-        updateThumbnail();
+        updateThumbnailDebounced();
     };
 
     // Local-only video control (no socket sync)
@@ -1017,9 +1088,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
 
                 {selectedElement && selectedElement.type === 'video' && (
                     <>
-                        <button onClick={() => handleLocalVideoControl(selectedElement.id, { isPlaying: !selectedElement.isPlaying })} style={selectedElement.isPlaying ? activeSubButtonStyle : subButtonStyle}>
-                            {selectedElement.isPlaying ? 'Pause' : 'Play'}
-                        </button>
                         <button onClick={() => handleLocalVideoControl(selectedElement.id, { isMuted: !selectedElement.isMuted })} style={selectedElement.isMuted ? activeSubButtonStyle : subButtonStyle}>
                             {selectedElement.isMuted ? 'Unmute' : 'Mute'}
                         </button>
@@ -1116,6 +1184,49 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                     </div>
                 )}
             </div >
+
+            {/* Upload Progress Panel */}
+            {uploadsInProgress.length > 0 && (
+                <div style={{
+                    position: 'absolute',
+                    bottom: '20px',
+                    right: '20px',
+                    width: '300px',
+                    background: '#2c3e50',
+                    border: '1px solid #34495e',
+                    borderRadius: '8px',
+                    padding: '12px',
+                    zIndex: 1000,
+                    boxShadow: '0 4px 15px rgba(0,0,0,0.5)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '10px'
+                }}>
+                    <div style={{ color: 'white', fontSize: '14px', fontWeight: 'bold', borderBottom: '1px solid #34495e', paddingBottom: '8px' }}>
+                        Uploads
+                    </div>
+                    {uploadsInProgress.map(upload => (
+                        <div key={upload.id} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span style={{ color: '#ecf0f1', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '180px' }} title={upload.fileName}>
+                                    {upload.fileName}
+                                </span>
+                                <span style={{ color: upload.status === 'error' ? '#e74c3c' : '#bdc3c7', fontSize: '11px' }}>
+                                    {upload.status === 'uploading' ? `${upload.progress}%` : upload.status}
+                                </span>
+                            </div>
+                            <div style={{ width: '100%', height: '6px', background: '#34495e', borderRadius: '3px', overflow: 'hidden' }}>
+                                <div style={{
+                                    width: `${upload.progress}%`,
+                                    height: '100%',
+                                    background: upload.status === 'error' ? '#e74c3c' : (upload.status === 'completed' ? '#2ecc71' : '#3498db'),
+                                    transition: 'width 0.3s ease'
+                                }} />
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
 
             {
                 editingId && (
@@ -1340,6 +1451,9 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                                                 setSelectedIds(prev => [...prev, el.id]);
                                             }
                                         } else {
+                                            if (el.type === 'video') {
+                                                handleLocalVideoControl(el.id, { isPlaying: !el.isPlaying });
+                                            }
                                             setSelectedIds([el.id]);
                                         }
                                     }}

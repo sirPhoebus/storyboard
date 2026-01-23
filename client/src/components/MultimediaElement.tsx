@@ -36,44 +36,65 @@ const MultimediaElement = forwardRef<any, MultimediaElementProps>(({
     onTransformEnd,
     isSelected,
     onClick,
-    isPlaying = true, // Default to auto-play for now, or controllable
+    isPlaying = true,
     isMuted = true,
 }, ref) => {
-    const [image] = useImage(url, 'anonymous');
+    // Only fetch image if type is image to save resources
+    const [image] = useImage(type === 'image' ? url : '', 'anonymous');
     const videoRef = useRef<HTMLVideoElement | null>(null);
     const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
     const imageRef = useRef<any>(null);
 
+    // Sync play/pause and mute/unmute
     useEffect(() => {
         if (type === 'video' && videoElement) {
-            if (isPlaying) videoElement.play().catch(() => { });
-            else videoElement.pause();
+            if (isPlaying) {
+                videoElement.play().catch(() => {
+                    console.warn('Video play failed - possibly browser policy');
+                });
+            } else {
+                videoElement.pause();
+            }
             videoElement.muted = isMuted;
         }
     }, [isPlaying, isMuted, videoElement, type]);
 
+    // Video Setup & Cleanup
     useEffect(() => {
         if (type === 'video') {
             const video = document.createElement('video');
             video.src = url;
             video.crossOrigin = 'Anonymous';
             video.loop = true;
-            video.muted = isMuted; // Initial state
-            // video.play(); // Handled by other effect
+            video.muted = isMuted;
+            video.playsInline = true;
+            video.setAttribute('webkit-playsinline', 'true'); // iOS support
+
             setVideoElement(video);
             videoRef.current = video;
 
-            const anim = new (window as any).Konva.Animation(() => {
-                // This forces re-draw
-            }, imageRef.current?.getLayer());
+            // Proper animation loop for Konva
+            let anim: any = null;
 
-            anim.start();
+            video.oncanplay = () => {
+                if (imageRef.current) {
+                    const layer = imageRef.current.getLayer();
+                    if (layer && !anim) {
+                        anim = new (window as any).Konva.Animation(() => {
+                            // Redraw the layer if the video is playing
+                            // Konva.Image automatically uses the video element if passed as 'image' prop
+                        }, layer);
+                        anim.start();
+                    }
+                }
+            };
 
             return () => {
-                anim.stop();
+                if (anim) anim.stop();
                 video.pause();
                 video.src = '';
                 video.load();
+                setVideoElement(null);
             };
         }
     }, [url, type]);
@@ -101,7 +122,12 @@ const MultimediaElement = forwardRef<any, MultimediaElementProps>(({
 
     return (
         <KonvaImage
-            ref={ref || imageRef}
+            ref={(node) => {
+                // Handle both the forwarded ref and internal ref
+                imageRef.current = node;
+                if (typeof ref === 'function') ref(node);
+                else if (ref) (ref as any).current = node;
+            }}
             image={videoElement || undefined}
             x={x}
             y={y}
