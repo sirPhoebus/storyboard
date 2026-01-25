@@ -22,6 +22,7 @@ interface CanvasToolbarProps {
     onDownload: () => void;
     onCreateGrid: () => void;
     onMoveSelectionToPage: (targetPageId: string) => void;
+    onResetSize: (ids: string[]) => void;
 }
 
 export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
@@ -42,7 +43,8 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
     onDelete,
     onDownload,
     onCreateGrid,
-    onMoveSelectionToPage
+    onMoveSelectionToPage,
+    onResetSize
 }) => {
     const mainButtonStyle: CSSProperties = {
         padding: '8px 12px',
@@ -124,6 +126,24 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
             >Add Media</button>
 
             <div style={separatorStyle} />
+
+            {(selectedIds.some(id => {
+                const el = elements.find(e => e.id === id);
+                return el?.type === 'image' || el?.type === 'video';
+            })) && (
+                    <>
+                        <button
+                            onClick={() => onResetSize(selectedIds.filter(id => {
+                                const el = elements.find(e => e.id === id);
+                                return el?.type === 'image' || el?.type === 'video';
+                            }))}
+                            style={subButtonStyle}
+                            title="Reset to original size"
+                        >
+                            ⟲ Size
+                        </button>
+                    </>
+                )}
 
             {selectedElement && selectedElement.type === 'video' && (
                 <>

@@ -62,7 +62,24 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     const [isMoveMenuOpen, setIsMoveMenuOpen] = useState(false);
     const [uploadsInProgress, setUploadsInProgress] = useState<UploadState[]>([]);
     const gridSize = 20;
-    // Let's first support "Smart Linking" updates.
+
+    // Viewport Persistence Helpers
+    const saveViewport = (id: string, x: number, y: number, scale: number) => {
+        if (!id) return;
+        localStorage.setItem(`viewport_${id}`, JSON.stringify({ x, y, scale }));
+    };
+
+    const loadViewport = (id: string) => {
+        const saved = localStorage.getItem(`viewport_${id}`);
+        if (saved) {
+            try {
+                return JSON.parse(saved);
+            } catch (e) {
+                console.warn('Failed to parse viewport state', e);
+            }
+        }
+        return null;
+    };
 
     const saveToHistory = () => {
         setHistory(prev => [...prev.slice(-19), elements]);
@@ -78,6 +95,17 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             setRedoStack([]);
             setSelectedIds([]);
             return;
+        }
+
+        // Restore Viewport for this page
+        const savedViewport = loadViewport(pageId);
+        if (savedViewport) {
+            setStagePos({ x: savedViewport.x, y: savedViewport.y });
+            setStageScale(savedViewport.scale);
+        } else {
+            // Default View
+            setStagePos({ x: 0, y: 0 });
+            setStageScale(1);
         }
 
         fetch(`${API_BASE_URL}/api/elements/${pageId}`)
@@ -905,6 +933,14 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             x: -(mousePointTo.x - pointerPos.x / newScale) * newScale,
             y: -(mousePointTo.y - pointerPos.y / newScale) * newScale
         });
+
+        if (pageId) {
+            saveViewport(pageId,
+                -(mousePointTo.x - pointerPos.x / newScale) * newScale,
+                -(mousePointTo.y - pointerPos.y / newScale) * newScale,
+                newScale
+            );
+        }
     };
 
 
@@ -1105,6 +1141,30 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
 
 
 
+    const handleResetSize = (ids: string[]) => {
+        ids.forEach(id => {
+            const node = elementRefs.current[id];
+            if (!node || !(node instanceof Konva.Image)) return;
+
+            const image = node.image();
+            if (image) {
+                let width, height;
+                if (image instanceof HTMLVideoElement) {
+                    width = image.videoWidth;
+                    height = image.videoHeight;
+                } else if (image instanceof HTMLImageElement) {
+                    width = image.naturalWidth;
+                    height = image.naturalHeight;
+                }
+
+                if (width && height) {
+                    handleUpdateStyle(id, { width, height });
+                }
+            }
+        });
+    };
+
+
     return (
         <div style={{ flex: 1, background: '#1a1a1a', position: 'relative', overflow: 'hidden' }}>
             <CanvasToolbar
@@ -1126,6 +1186,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 onDownload={handleDownload}
                 onCreateGrid={handleCreateGrid}
                 onMoveSelectionToPage={handleMoveSelectionToPage}
+                onResetSize={handleResetSize}
             />
             <input type="file" multiple ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} accept="image/*,video/*" />
 
@@ -1185,7 +1246,9 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 scaleY={stageScale}
                 onDragEnd={(e) => {
                     if (e.target === e.target.getStage()) {
-                        setStagePos({ x: e.target.x(), y: e.target.y() });
+                        const newPos = { x: e.target.x(), y: e.target.y() };
+                        setStagePos(newPos);
+                        if (pageId) saveViewport(pageId, newPos.x, newPos.y, stageScale);
                     }
                 }}
             >
