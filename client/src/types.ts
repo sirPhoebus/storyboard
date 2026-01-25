@@ -35,4 +35,7 @@ export interface Page {
     chapter_id: string;
     storyboardId: string;
     thumbnail?: string;
+    viewport_x?: number;
+    viewport_y?: number;
+    viewport_scale?: number;
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Stage, Layer, Rect, Text, Arrow, Circle, Transformer, Line as KonvaLine } from 'react-konva';
 import Konva from 'konva';
 import { Socket } from 'socket.io-client';
@@ -69,7 +69,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         localStorage.setItem(`viewport_${id}`, JSON.stringify({ x, y, scale }));
     };
 
-    const loadViewport = (id: string) => {
+    const loadViewport = useCallback((id: string) => {
+        // 1. Try Local Storage
         const saved = localStorage.getItem(`viewport_${id}`);
         if (saved) {
             try {
@@ -78,8 +79,19 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 console.warn('Failed to parse viewport state', e);
             }
         }
+
+        // 2. Try Server Data
+        const page = allPages.find(p => p.id === id);
+        if (page && page.viewport_scale) {
+            return {
+                x: page.viewport_x || 0,
+                y: page.viewport_y || 0,
+                scale: page.viewport_scale
+            };
+        }
+
         return null;
-    };
+    }, [allPages]);
 
     const saveToHistory = () => {
         setHistory(prev => [...prev.slice(-19), elements]);
@@ -119,7 +131,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 setHistory([]);
                 setRedoStack([]);
             });
-    }, [pageId]);
+    }, [pageId, loadViewport]);
 
     useEffect(() => {
         if (!socket) return;
@@ -1164,6 +1176,25 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         });
     };
 
+    const handleSaveView = () => {
+        if (!pageId) return;
+
+        // Optimistically save locally too
+        saveViewport(pageId, stagePos.x, stagePos.y, stageScale);
+
+        fetch(`${API_BASE_URL}/api/pages/${pageId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                viewport_x: stagePos.x,
+                viewport_y: stagePos.y,
+                viewport_scale: stageScale
+            })
+        })
+            .then(() => alert('Viewport saved to server!'))
+            .catch(err => console.error('Failed to save viewport', err));
+    };
+
 
     return (
         <div style={{ flex: 1, background: '#1a1a1a', position: 'relative', overflow: 'hidden' }}>
@@ -1187,6 +1218,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 onCreateGrid={handleCreateGrid}
                 onMoveSelectionToPage={handleMoveSelectionToPage}
                 onResetSize={handleResetSize}
+                onSaveView={handleSaveView}
             />
             <input type="file" multiple ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} accept="image/*,video/*" />
 

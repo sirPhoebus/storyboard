@@ -318,17 +318,25 @@ app.get('/api/search', (req: any, res: any) => {
 });
 
 app.patch('/api/pages/:id', (req: any, res: any) => {
-    const { title, thumbnail } = req.body;
-    if (title !== undefined && thumbnail !== undefined) {
-        db.prepare('UPDATE pages SET title = ?, thumbnail = ? WHERE id = ?').run(title, thumbnail, req.params.id);
-    } else if (title !== undefined) {
-        db.prepare('UPDATE pages SET title = ? WHERE id = ?').run(title, req.params.id);
-    } else if (thumbnail !== undefined) {
-        db.prepare('UPDATE pages SET thumbnail = ? WHERE id = ?').run(thumbnail, req.params.id);
+    const updates = req.body;
+    const allowedFields = ['title', 'thumbnail', 'viewport_x', 'viewport_y', 'viewport_scale'];
+    const fieldsToUpdate = Object.keys(updates).filter(key => allowedFields.includes(key));
+
+    if (fieldsToUpdate.length === 0) {
+        return res.status(400).json({ error: 'No valid fields to update' });
     }
-    const updatedPage = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id) as any;
-    io.emit('page:update', updatedPage);
-    res.json({ success: true });
+
+    const setClause = fieldsToUpdate.map(key => `${key} = ?`).join(', ');
+    const values = fieldsToUpdate.map(key => updates[key]);
+
+    try {
+        db.prepare(`UPDATE pages SET ${setClause} WHERE id = ?`).run(...values, req.params.id);
+        const updatedPage = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id) as any;
+        io.emit('page:update', updatedPage);
+        res.json({ success: true });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.post('/api/pages/:id/move-chapter', (req: any, res: any) => {

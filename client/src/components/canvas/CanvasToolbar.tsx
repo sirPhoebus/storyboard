@@ -23,6 +23,7 @@ interface CanvasToolbarProps {
     onCreateGrid: () => void;
     onMoveSelectionToPage: (targetPageId: string) => void;
     onResetSize: (ids: string[]) => void;
+    onSaveView: () => void;
 }
 
 export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
@@ -44,7 +45,9 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
     onDownload,
     onCreateGrid,
     onMoveSelectionToPage,
-    onResetSize
+
+    onResetSize,
+    onSaveView
 }) => {
     const mainButtonStyle: CSSProperties = {
         padding: '8px 12px',
@@ -124,6 +127,16 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
                 disabled={!pageId}
                 title={pageId ? "Add Media" : noPageMessage}
             >Add Media</button>
+
+            {pageId && (
+                <button
+                    onClick={onSaveView}
+                    style={{ ...subButtonStyle, fontSize: '16px', padding: '6px 8px', marginLeft: '8px' }}
+                    title="Save current view as default for this page (Saved to Server)"
+                >
+                    ☁️
+                </button>
+            )}
 
             <div style={separatorStyle} />
 

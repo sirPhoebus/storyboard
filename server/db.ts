@@ -77,6 +77,14 @@ try {
   // Column already exists
 }
 
+try {
+  db.exec('ALTER TABLE pages ADD COLUMN viewport_x REAL');
+  db.exec('ALTER TABLE pages ADD COLUMN viewport_y REAL');
+  db.exec('ALTER TABLE pages ADD COLUMN viewport_scale REAL');
+} catch (e) {
+  // Columns already exist
+}
+
 // Seed initial data if empty
 const storyboardCount = db.prepare('SELECT COUNT(*) as count FROM storyboards').get() as { count: number };
 if (storyboardCount.count === 0) {
