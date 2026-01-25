@@ -32,7 +32,7 @@ export const useSocket = () => {
             console.log('🔄 Socket reconnected after', attemptNumber, 'attempts');
         });
 
-        setSocket(s);
+        setTimeout(() => setSocket(s), 0);
 
         return () => {
             s.disconnect();

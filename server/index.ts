@@ -6,6 +6,7 @@ import db from './db';
 import multer from 'multer';
 import path from 'path';
 import crypto from 'crypto';
+import archiver from 'archiver';
 
 const dataDir = process.env.DATA_DIR || process.cwd();
 const uploadsDir = path.join(dataDir, 'uploads');
@@ -76,6 +77,12 @@ app.post('/api/chapters', (req: any, res: any) => {
 
     try {
         const chapterData = createChapterTransaction();
+        io.emit('chapter:add', chapterData);
+        // Also emit the auto-created page if it exists
+        const firstPage = db.prepare('SELECT * FROM pages WHERE chapter_id = ?').get(chapterData.id) as any;
+        if (firstPage) {
+            io.emit('page:add', firstPage);
+        }
         res.json(chapterData);
     } catch (err: any) {
         res.status(500).json({ error: err.message });
@@ -86,6 +93,7 @@ app.patch('/api/chapters/:id', (req: any, res: any) => {
     const { title } = req.body;
     try {
         db.prepare('UPDATE chapters SET title = ? WHERE id = ?').run(title, req.params.id);
+        io.emit('chapter:update', { id: req.params.id, title });
         res.json({ success: true });
     } catch (err: any) {
         res.status(500).json({ error: err.message });
@@ -105,6 +113,7 @@ app.delete('/api/chapters/:id', (req: any, res: any) => {
 
     try {
         transaction();
+        io.emit('chapter:delete', { id: chapterId });
         res.json({ success: true });
     } catch (error: any) {
         res.status(500).json({ error: error.message });
@@ -147,7 +156,9 @@ app.post('/api/pages', (req: any, res: any) => {
     db.prepare('INSERT INTO pages (id, storyboard_id, chapter_id, title, order_index) VALUES (?, ?, ?, ?, ?)').run(
         id, storyboardId, chapterId, title, orderIndex
     );
-    res.json({ id, title, storyboard_id: storyboardId, chapter_id: chapterId, order_index: orderIndex });
+    const newPage = { id, title, storyboard_id: storyboardId, chapter_id: chapterId, order_index: orderIndex };
+    io.emit('page:add', newPage);
+    res.json(newPage);
 });
 
 app.post('/api/pages/duplicate', (req: any, res: any) => {
@@ -204,6 +215,8 @@ app.post('/api/pages/duplicate', (req: any, res: any) => {
         );
     });
 
+    const newPage = db.prepare('SELECT * FROM pages WHERE id = ?').get(newId) as any;
+    io.emit('page:add', newPage);
     res.json({ success: true, newPageId: newId });
 });
 
@@ -217,6 +230,7 @@ app.put('/api/pages/reorder', (req: any, res: any) => {
         });
     });
     transaction(order);
+    io.emit('pages:reorder', { order });
     res.json({ success: true });
 });
 
@@ -257,6 +271,32 @@ app.post('/api/elements/move', (req: any, res: any) => {
     }
 });
 
+app.patch('/api/elements/batch-move', (req: any, res: any) => {
+    const { elements } = req.body; // Array of { id, x, y }
+    if (!elements || !Array.isArray(elements)) {
+        return res.status(400).json({ error: 'elements array required' });
+    }
+
+    try {
+        const updateStmt = db.prepare('UPDATE elements SET x = ?, y = ? WHERE id = ?');
+        const batchUpdate = db.transaction((updates: any[]) => {
+            for (const el of updates) {
+                updateStmt.run(el.x, el.y, el.id);
+            }
+        });
+
+        batchUpdate(elements);
+
+        // Broadcast to all clients
+        elements.forEach(el => {
+            io.emit('element:move', el);
+        });
+
+        res.json({ success: true });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
 app.get('/api/search', (req: any, res: any) => {
     const { q } = req.query;
     if (!q) return res.json([]);
@@ -286,22 +326,123 @@ app.patch('/api/pages/:id', (req: any, res: any) => {
     } else if (thumbnail !== undefined) {
         db.prepare('UPDATE pages SET thumbnail = ? WHERE id = ?').run(thumbnail, req.params.id);
     }
+    const updatedPage = db.prepare('SELECT * FROM pages WHERE id = ?').get(req.params.id) as any;
+    io.emit('page:update', updatedPage);
     res.json({ success: true });
 });
 
+app.post('/api/pages/:id/move-chapter', (req: any, res: any) => {
+    const { chapterId } = req.body;
+    const pageId = req.params.id;
+
+    try {
+        const result = db.prepare('SELECT COUNT(*) as count FROM pages WHERE chapter_id = ?').get(chapterId) as any;
+        const newOrderIndex = result ? result.count : 0;
+
+        db.prepare('UPDATE pages SET chapter_id = ?, order_index = ? WHERE id = ?').run(chapterId, newOrderIndex, pageId);
+
+        const updatedPage = db.prepare('SELECT * FROM pages WHERE id = ?').get(pageId) as any;
+        io.emit('page:update', updatedPage);
+
+        res.json({ success: true, page: updatedPage });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+const hardDeleteAssets = (ids: string[]) => {
+    try {
+        if (!ids || ids.length === 0) return;
+
+        const placeholders = ids.map(() => '?').join(',');
+        const elements = db.prepare(`SELECT id, content FROM elements WHERE id IN (${placeholders})`).all(...ids) as any[];
+
+        elements.forEach(el => {
+            const content = JSON.parse(el.content || '{}');
+            if (content.url) {
+                const fileName = path.basename(content.url);
+                const filePath = path.join(uploadsDir, fileName);
+
+                // Check if any OTHER element uses this file
+                // We exclude the elements being deleted from the check
+                const countResult = db.prepare(`
+                    SELECT COUNT(*) as count 
+                    FROM elements 
+                    WHERE id NOT IN (${placeholders}) 
+                    AND content LIKE ?
+                `).get(...ids, `%${fileName}%`) as { count: number };
+
+                if (countResult.count === 0) {
+                    if (fs.existsSync(filePath)) {
+                        console.log(`🗑️ Hard deleting file: ${filePath}`);
+                        fs.unlinkSync(filePath);
+                    }
+                } else {
+                    console.log(`🛡️ Preserving file ${fileName}, used by ${countResult.count} other elements`);
+                }
+            }
+        });
+    } catch (err) {
+        console.error('Error in hardDeleteAssets:', err);
+    }
+};
+
 app.delete('/api/pages/:id', (req: any, res: any) => {
     const pageId = req.params.id;
+
+    // Get all element IDs for this page to hard delete their assets
+    const elements = db.prepare('SELECT id FROM elements WHERE page_id = ?').all(pageId) as { id: string }[];
+    const elementIds = elements.map(e => e.id);
+    if (elementIds.length > 0) {
+        hardDeleteAssets(elementIds);
+    }
+
     const deletePage = db.transaction(() => {
         db.prepare('DELETE FROM elements WHERE page_id = ?').run(pageId);
         db.prepare('DELETE FROM pages WHERE id = ?').run(pageId);
     });
     deletePage();
+    io.emit('page:delete', { id: pageId });
     res.json({ success: true });
 });
 
+app.delete('/api/elements/batch', (req: any, res: any) => {
+    const { ids } = req.body;
+    if (!ids || !Array.isArray(ids)) {
+        return res.status(400).json({ error: 'ids array required' });
+    }
+
+    try {
+        hardDeleteAssets(ids);
+
+        const deleteStmt = db.prepare('DELETE FROM elements WHERE id = ?');
+        const batchDelete = db.transaction((elementIds: string[]) => {
+            for (const id of elementIds) {
+                deleteStmt.run(id);
+            }
+        });
+
+        batchDelete(ids);
+
+        // Broadcast to all clients
+        ids.forEach(id => {
+            io.emit('element:delete', { id });
+        });
+
+        res.json({ success: true });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.delete('/api/elements/:id', (req: any, res: any) => {
-    db.prepare('DELETE FROM elements WHERE id = ?').run(req.params.id);
-    res.json({ success: true });
+    try {
+        hardDeleteAssets([req.params.id]);
+        db.prepare('DELETE FROM elements WHERE id = ?').run(req.params.id);
+        res.json({ success: true });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.post('/api/upload', upload.single('file'), (req: any, res: any) => {
@@ -312,7 +453,41 @@ app.post('/api/upload', upload.single('file'), (req: any, res: any) => {
     const protocol = req.protocol;
     const url = `${protocol}://${host}/uploads/${req.file.filename}`;
     res.json({ url, type: req.file.mimetype });
+});
 
+app.post('/api/download-zip', (req: any, res: any) => {
+    const { elementIds } = req.body;
+    if (!elementIds || !Array.isArray(elementIds)) {
+        return res.status(400).json({ error: 'elementIds array required' });
+    }
+
+    try {
+        const elements = db.prepare(`SELECT * FROM elements WHERE id IN (${elementIds.map(() => '?').join(',')})`).all(...elementIds) as any[];
+
+        const archive = archiver('zip', {
+            zlib: { level: 9 }
+        });
+
+        res.attachment('assets.zip');
+        archive.pipe(res);
+
+        elements.forEach(el => {
+            const content = JSON.parse(el.content);
+            if (content.url) {
+                // Extract filename from URL (e.g., http://localhost:5000/uploads/123-file.jpg -> 123-file.jpg)
+                const fileName = path.basename(content.url);
+                const filePath = path.join(uploadsDir, fileName);
+
+                if (fs.existsSync(filePath)) {
+                    archive.file(filePath, { name: fileName });
+                }
+            }
+        });
+
+        archive.finalize();
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.post('/api/elements', (req: any, res: any) => {

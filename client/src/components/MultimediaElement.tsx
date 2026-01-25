@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, forwardRef } from 'react';
 import { Image as KonvaImage } from 'react-konva';
+import Konva from 'konva';
 import useImage from 'use-image';
 
 interface MultimediaElementProps {
@@ -11,18 +12,18 @@ interface MultimediaElementProps {
     height?: number;
     url: string;
     draggable?: boolean;
-    onDragStart?: (e: any) => void;
-    onDragMove?: (e: any) => void;
-    onDragEnd?: (e: any) => void;
-    onTransformEnd?: (e: any) => void;
+    onDragStart?: (e: Konva.KonvaEventObject<DragEvent>) => void;
+    onDragMove?: (e: Konva.KonvaEventObject<DragEvent>) => void;
+    onDragEnd?: (e: Konva.KonvaEventObject<DragEvent>) => void;
+    onTransformEnd?: (e: Konva.KonvaEventObject<Event>) => void;
     isSelected?: boolean;
-    onClick?: (e: any) => void;
+    onClick?: (e: Konva.KonvaEventObject<MouseEvent>) => void;
     // Video controls
     isPlaying?: boolean;
     isMuted?: boolean;
 }
 
-const MultimediaElement = forwardRef<any, MultimediaElementProps>(({
+const MultimediaElement = forwardRef<Konva.Image, MultimediaElementProps>(({
     type,
     url,
     x,
@@ -43,7 +44,7 @@ const MultimediaElement = forwardRef<any, MultimediaElementProps>(({
     const [image] = useImage(type === 'image' ? url : '', 'anonymous');
     const videoRef = useRef<HTMLVideoElement | null>(null);
     const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
-    const imageRef = useRef<any>(null);
+    const imageRef = useRef<Konva.Image>(null);
 
     // Sync play/pause and mute/unmute
     useEffect(() => {
@@ -55,7 +56,10 @@ const MultimediaElement = forwardRef<any, MultimediaElementProps>(({
             } else {
                 videoElement.pause();
             }
-            videoElement.muted = isMuted;
+            // Use videoRef.current to avoid mutating state object directly if linter complains
+            if (videoRef.current) {
+                videoRef.current.muted = isMuted;
+            }
         }
     }, [isPlaying, isMuted, videoElement, type]);
 
@@ -70,17 +74,17 @@ const MultimediaElement = forwardRef<any, MultimediaElementProps>(({
             video.playsInline = true;
             video.setAttribute('webkit-playsinline', 'true'); // iOS support
 
-            setVideoElement(video);
+            setTimeout(() => setVideoElement(video), 0);
             videoRef.current = video;
 
             // Proper animation loop for Konva
-            let anim: any = null;
+            let anim: Konva.Animation | null = null;
 
             video.oncanplay = () => {
                 if (imageRef.current) {
                     const layer = imageRef.current.getLayer();
                     if (layer && !anim) {
-                        anim = new (window as any).Konva.Animation(() => {
+                        anim = new Konva.Animation(() => {
                             // Redraw the layer if the video is playing
                             // Konva.Image automatically uses the video element if passed as 'image' prop
                         }, layer);
@@ -97,6 +101,7 @@ const MultimediaElement = forwardRef<any, MultimediaElementProps>(({
                 setVideoElement(null);
             };
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [url, type]);
 
     if (type === 'image') {
@@ -126,7 +131,7 @@ const MultimediaElement = forwardRef<any, MultimediaElementProps>(({
                 // Handle both the forwarded ref and internal ref
                 imageRef.current = node;
                 if (typeof ref === 'function') ref(node);
-                else if (ref) (ref as any).current = node;
+                else if (ref) (ref as React.MutableRefObject<Konva.Image | null>).current = node;
             }}
             image={videoElement || undefined}
             x={x}

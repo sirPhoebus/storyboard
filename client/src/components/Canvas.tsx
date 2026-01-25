@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Stage, Layer, Rect, Text, Arrow, Circle, Transformer, Line as KonvaLine } from 'react-konva';
+import Konva from 'konva';
+import { Socket } from 'socket.io-client';
 import MultimediaElement from './MultimediaElement';
+import { CanvasToolbar } from './canvas/CanvasToolbar';
+import { UploadProgress } from './canvas/UploadProgress';
+import { NoPagePlaceholder } from './canvas/NoPagePlaceholder';
 import { API_BASE_URL } from '../config';
 import type { Element, Chapter, Page } from '../types';
 
@@ -11,56 +16,13 @@ interface CanvasProps {
     chapters: Chapter[];
     allPages: Page[];
     onSelectPage: (id: string) => void;
-    socket: any;
+    socket: Socket | null;
 }
 
-interface UploadState {
-    id: string;
-    fileName: string;
-    progress: number;
-    status: 'uploading' | 'processing' | 'completed' | 'error';
-    error?: string;
-}
+import type { UploadState } from './canvas/UploadProgress';
 
 const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidth, chapters, allPages, onSelectPage, socket }) => {
 
-    const mainButtonStyle = {
-        padding: '8px 12px',
-        background: '#34495e',
-        color: 'white',
-        border: 'none',
-        borderRadius: '4px',
-        cursor: 'pointer',
-        fontSize: '14px',
-        fontWeight: 500,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
-    };
-
-    const subButtonStyle = {
-        ...mainButtonStyle,
-        padding: '6px 10px',
-        background: 'rgba(0, 0, 0, 0.4)',
-        border: '1px solid rgba(255, 255, 255, 0.2)',
-        fontSize: '13px',
-        color: '#ddd',
-        boxShadow: 'none'
-    };
-
-    const activeSubButtonStyle = {
-        ...subButtonStyle,
-        background: 'rgba(52, 152, 219, 0.4)',
-        borderColor: '#3498db',
-        color: 'white'
-    };
-
-    const separatorStyle = {
-        width: '1px',
-        backgroundColor: 'rgba(255,255,255,0.2)',
-        margin: '0 5px'
-    };
 
     const [elements, setElements] = useState<Element[]>([]);
     const [editingId, setEditingId] = useState<string | null>(null);
@@ -78,10 +40,10 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     const [clipboard, setClipboard] = useState<Element | null>(null);
     const [editText, setEditText] = useState('');
     const fileInputRef = useRef<HTMLInputElement>(null);
-    const stageRef = useRef<any>(null);
-    const transformerRef = useRef<any>(null);
+    const stageRef = useRef<Konva.Stage>(null);
+    const transformerRef = useRef<Konva.Transformer>(null);
     // Element refs map
-    const elementRefs = useRef<{ [key: string]: any }>({});
+    const elementRefs = useRef<{ [key: string]: Konva.Node }>({});
 
     // NOTE: selectedNodeRef is removed, using elementRefs instead
 
@@ -95,8 +57,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
 
     // Grid & Snapping State
-    const [showGrid, setShowGrid] = useState(false);
-    const [snapToGrid, setSnapToGrid] = useState(false);
+    const [showGrid, /* setShowGrid */] = useState(false);
+    const [snapToGrid, /* setSnapToGrid */] = useState(false);
     const [isMoveMenuOpen, setIsMoveMenuOpen] = useState(false);
     const [uploadsInProgress, setUploadsInProgress] = useState<UploadState[]>([]);
     const gridSize = 20;
@@ -107,23 +69,22 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         setRedoStack([]);
     };
 
-    const thumbnailTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const updateThumbnailDebounced = () => {
-        if (thumbnailTimeoutRef.current) clearTimeout(thumbnailTimeoutRef.current);
-        thumbnailTimeoutRef.current = setTimeout(() => {
-            updateThumbnail();
-            thumbnailTimeoutRef.current = null;
-        }, 1000); // 1 second debounce
-    };
 
     useEffect(() => {
-        if (!pageId) return;
+        if (!pageId) {
+            // Clear elements when no page is selected (e.g., after page deletion)
+            setElements([]);
+            setHistory([]);
+            setRedoStack([]);
+            setSelectedIds([]);
+            return;
+        }
 
         fetch(`${API_BASE_URL}/api/elements/${pageId}`)
 
             .then(res => res.json())
-            .then(data => {
-                setElements(data.map((el: any) => ({
+            .then((data: (Element & { content: Record<string, unknown> })[]) => {
+                setElements(data.map(el => ({
                     ...el,
                     ...el.content
                 })));
@@ -141,12 +102,12 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             );
         });
 
-        socket.on('element:update', (data: { id: string, content?: any, [key: string]: any }) => {
+        socket.on('element:update', (data: { id: string, content?: Record<string, unknown> } & Partial<Element>) => {
             setElements((prev: Element[]) => {
                 return prev.map((el: Element) => {
                     if (el.id === data.id) {
                         // Merge content if present, plus any top-level fields
-                        const { id: _, content, ...otherFields } = data;
+                        const { content, ...otherFields } = data;
                         return {
                             ...el,
                             ...(content || {}),
@@ -158,7 +119,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             });
         });
 
-        socket.on('element:add', (data: any) => {
+        socket.on('element:add', (data: Element & { content: Record<string, unknown>, pageId: string }) => {
             console.log('📥 Client received element:add:', data.id, 'for page:', data.pageId, 'current page:', pageId);
             if (data.pageId !== pageId) {
                 console.log('⏭️ Skipping element:add - different page');
@@ -175,7 +136,16 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         });
 
         socket.on('element:delete', (data: { id: string }) => {
-            setElements((prev: Element[]) => prev.filter(el => el.id !== data.id));
+            setElements((prev: Element[]) => {
+                // Only delete if the element exists in current page
+                const elementExists = prev.some(el => el.id === data.id);
+                if (!elementExists) {
+                    console.log('⏭️ Skipping element:delete - element not on this page');
+                    return prev;
+                }
+                console.log('🗑️ Deleting element:', data.id);
+                return prev.filter(el => el.id !== data.id);
+            });
             if (selectedId === data.id) setSelectedId(null);
         });
 
@@ -219,9 +189,9 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Delete' || e.key === 'Backspace') {
-                if (selectedId && !editingId) {
-                    e.preventDefault(); // Prevent browser back navigation or other defaults
-                    handleDeleteElement(selectedId);
+                if (selectedIds.length > 0 && !editingId) {
+                    e.preventDefault();
+                    handleDeleteElements(selectedIds);
                 }
             } else if (e.ctrlKey || e.metaKey) {
                 if (e.key === 'z') {
@@ -249,7 +219,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                         // We need to create it on server
                         // But wait, the ID must be new.
                         // Clean up ID and other specific props
-                        const { id, ...content } = newElement;
+                        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                        const { id: _, ...content } = newElement;
 
                         // We need to POST to create
                         fetch(`${API_BASE_URL}/api/elements`, {
@@ -262,7 +233,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                             .then(data => {
                                 // Element will be added via socket broadcast
                                 setSelectedId(data.id); // Select the new item
-                                updateThumbnailDebounced();
                             });
                     }
                 }
@@ -271,7 +241,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [selectedId, editingId, history, redoStack, elements]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedId, editingId, history, redoStack, elements, clipboard, pageId]);
 
     const handleUndo = () => {
         if (history.length === 0) return;
@@ -280,7 +251,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         setRedoStack(prev => [elements, ...prev]);
         setHistory(newHistory);
         setElements(previous);
-        updateThumbnailDebounced();
     };
 
     const handleRedo = () => {
@@ -290,36 +260,39 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         setHistory(prev => [...prev, elements]);
         setRedoStack(newRedoStack);
         setElements(next);
-        updateThumbnailDebounced();
     };
 
-    const updateThumbnail = () => {
-        if (!stageRef.current || !pageId) return;
-        try {
-            const dataURL = stageRef.current.toDataURL({ pixelRatio: 0.2 });
-            fetch(`${API_BASE_URL}/api/pages/${pageId}`, {
+    const handleDeleteElements = async (ids: string[]) => {
+        if (ids.length === 0) return;
+        saveToHistory();
 
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ thumbnail: dataURL })
-            });
-        } catch (e) {
-            console.error('Thumbnail capture failed', e);
+        try {
+            if (ids.length === 1) {
+                await fetch(`${API_BASE_URL}/api/elements/${ids[0]}`, { method: 'DELETE' });
+            } else {
+                await fetch(`${API_BASE_URL}/api/elements/batch`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ids })
+                });
+            }
+
+            setElements(prev => prev.filter(el => !ids.includes(el.id)));
+            setSelectedIds([]);
+
+            if (socket) {
+                ids.forEach(id => socket.emit('element:delete', { id }));
+            }
+        } catch (err) {
+            console.error('Failed to delete elements:', err);
         }
     };
 
+    /*
     const handleDeleteElement = (id: string) => {
-        saveToHistory();
-        fetch(`${API_BASE_URL}/api/elements/${id}`, {
-
-            method: 'DELETE'
-        }).then(() => {
-            setElements(prev => prev.filter(el => el.id !== id));
-            setSelectedId(null);
-            if (socket) socket.emit('element:delete', { id });
-            updateThumbnailDebounced();
-        });
+        handleDeleteElements([id]);
     };
+    */
 
     const handleMoveSelectionToPage = async (targetPageId: string) => {
         if (!targetPageId || targetPageId === pageId) return;
@@ -329,68 +302,45 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
 
         saveToHistory();
 
-        // 1. Create on target page
-        const createPromises = elementsToMove.map(el => {
-            // Destructure known DB columns to separate them from content properties
-            // Also destructure 'content' to remove the stale object if it exists
-            const {
-                id, pageId: oldPageId, type, x, y, width, height, z_index,
-                group_id, start_element_id, end_element_id,
-                content: staleContent,
-                ...restContent
-            } = el as any;
-
-            // restContent now contains latest state of text, url, points, styling, etc.
-            const newContent = restContent;
-
-            const newElement = {
-                pageId: targetPageId,
-                type,
-                x, y, width, height, z_index, group_id, start_element_id, end_element_id,
-                content: newContent
-            };
-
-            return fetch(`${API_BASE_URL}/api/elements`, {
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/elements/move`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(newElement)
-            }).then(res => res.json());
-        });
-
-        await Promise.all(createPromises);
-
-        // 2. Delete from current page
-        const deletePromises = elementsToMove.map(el => {
-            return fetch(`${API_BASE_URL}/api/elements/${el.id}`, {
-                method: 'DELETE'
+                body: JSON.stringify({
+                    elementIds: selectedIds,
+                    targetPageId
+                })
             });
-        });
 
-        await Promise.all(deletePromises);
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                console.error('Failed to move elements:', errorData);
+                return;
+            }
 
-        // 3. Update local state
-        setElements(prev => prev.filter(el => !selectedIds.includes(el.id)));
+            // Successfully moved.
+            // The socket will broadcast 'element:delete' for current page
+            // and 'element:add' for target page.
 
-        // Emit delete events so other clients on this page see them vanish
-        if (socket) {
-            elementsToMove.forEach(el => {
-                socket.emit('element:delete', { id: el.id });
-            });
+            // We can preemptively remove them from UI to make it snappy, 
+            // but since we are navigating away, it might not matter much.
+            // However, updating local state is good practice.
+            setElements(prev => prev.filter(el => !selectedIds.includes(el.id)));
+            setSelectedIds([]);
+            setIsMoveMenuOpen(false);
+
+            // Navigate to target page
+            onSelectPage(targetPageId);
+        } catch (err) {
+            console.error('Error moving elements:', err);
         }
-
-        setSelectedIds([]);
-        setIsMoveMenuOpen(false);
-        updateThumbnailDebounced();
-
-        // Navigate to target page
-        onSelectPage(targetPageId);
     };
 
     const handleDragStart = () => {
         saveToHistory();
     };
 
-    const handleDragMove = (e: any, id: string) => {
+    const handleDragMove = (e: Konva.KonvaEventObject<DragEvent>, id: string) => {
         const draggedElement = elements.find(el => el.id === id);
         if (!draggedElement) return;
 
@@ -440,7 +390,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         if (!draggedElement) return;
 
         // Grouping & Selection Logic
-        let elementsToUpdate = [{ id, x: finalX, y: finalY }];
+        const elementsToUpdate = [{ id, x: finalX, y: finalY }];
 
         const dx = finalX - draggedElement.x;
         const dy = finalY - draggedElement.y;
@@ -482,7 +432,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         // Smart Linking Logic: Update connected arrows
         // We need to update arrows where start_element_id or end_element_id matches any moved element
         const movedIds = elementsToUpdate.map(u => u.id);
-        const arrowsToUpdate: any[] = [];
+        const arrowsToUpdate: Partial<Element>[] = [];
 
         // This relies on state *before* update for finding arrows, but we need new positions of elements
         // We can simulate new state
@@ -558,8 +508,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                     if (existingUpdate) {
                         existingUpdate.points = newPoints; // Update points on top of moved x,y
                         // Wait, if x,y moved, relative target needs to be re-calc from NEW x,y
-                        const finalArrowX = existingUpdate.x;
-                        const finalArrowY = existingUpdate.y;
+                        const finalArrowX = existingUpdate.x || 0;
+                        const finalArrowY = existingUpdate.y || 0;
                         newPoints[newPoints.length - 2] = targetX - finalArrowX;
                         newPoints[newPoints.length - 1] = targetY - finalArrowY;
                     } else {
@@ -580,11 +530,9 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 if (socket) socket.emit('element:update', { id: u.id, content: u });
             });
         }
-
-        updateThumbnailDebounced();
     };
 
-    const handleTransformEnd = (id: string, node: any) => {
+    const handleTransformEnd = (id: string, node: Konva.Node) => {
         saveToHistory();
         const element = elements.find(el => el.id === id);
         if (!element) return;
@@ -654,7 +602,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 });
             }
         }
-        updateThumbnailDebounced();
     };
 
     const handleArrowPointDrag = (id: string, pointIndex: number, x: number, y: number) => {
@@ -674,7 +621,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         if (element && socket) {
             socket.emit('element:update', { id, content: { points: element.points } });
         }
-        updateThumbnailDebounced();
     };
 
     const handleAddZone = () => {
@@ -698,7 +644,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             .then(res => res.json())
             .then(() => {
                 // Element will be added via socket broadcast
-                updateThumbnailDebounced();
             });
     };
 
@@ -722,7 +667,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             .then(res => res.json())
             .then(() => {
                 // Element will be added via socket broadcast
-                updateThumbnailDebounced();
             });
     };
 
@@ -730,7 +674,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         saveToHistory();
         setElements(prev => prev.map(el => (el.id === id ? { ...el, text } : el)));
         if (socket) socket.emit('element:update', { id, content: { text } });
-        updateThumbnailDebounced();
     };
 
     const handleAddArrow = () => {
@@ -755,7 +698,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             .then(res => res.json())
             .then(() => {
                 // Element will be added via socket broadcast
-                updateThumbnailDebounced();
             });
     };
 
@@ -866,9 +808,15 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         const results = await Promise.all(uploadPromises);
         const validResults = results.filter(Boolean);
 
-        let currentX = 100;
-        const currentY = 100;
+        const baseX = 100;
+        const baseY = 100;
         const spacing = 20;
+        const columns = 5;
+
+        let col = 0;
+        let maxRowHeight = 0;
+        let currentX = baseX;
+        let currentY = baseY;
 
         for (const data of validResults) {
             if (!data) continue;
@@ -891,12 +839,23 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
 
                 await elementRes.json();
                 // Element will be added via socket broadcast
-                currentX += data.width + spacing;
+
+                // Prepare next position
+                col++;
+                maxRowHeight = Math.max(maxRowHeight, data.height);
+
+                if (col >= columns) {
+                    col = 0;
+                    currentX = baseX;
+                    currentY += maxRowHeight + spacing;
+                    maxRowHeight = 0;
+                } else {
+                    currentX += data.width + spacing;
+                }
             } catch (e) {
                 console.error('Failed to create element:', e);
             }
         }
-        updateThumbnailDebounced();
         if (fileInputRef.current) fileInputRef.current.value = '';
     };
 
@@ -925,31 +884,40 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         });
     };
 
-    const handleWheel = (e: any) => {
+    const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
         e.evt.preventDefault();
         const scaleBy = 1.1;
         const stage = e.target.getStage();
+        if (!stage) return;
         const oldScale = stage.scaleX();
+        const pointerPos = stage.getPointerPosition();
+        if (!pointerPos) return;
+
         const mousePointTo = {
-            x: stage.getPointerPosition().x / oldScale - stage.x() / oldScale,
-            y: stage.getPointerPosition().y / oldScale - stage.y() / oldScale
+            x: pointerPos.x / oldScale - stage.x() / oldScale,
+            y: pointerPos.y / oldScale - stage.y() / oldScale
         };
 
         const newScale = e.evt.deltaY < 0 ? oldScale * scaleBy : oldScale / scaleBy;
 
         setStageScale(newScale);
         setStagePos({
-            x: -(mousePointTo.x - stage.getPointerPosition().x / newScale) * newScale,
-            y: -(mousePointTo.y - stage.getPointerPosition().y / newScale) * newScale
+            x: -(mousePointTo.x - pointerPos.x / newScale) * newScale,
+            y: -(mousePointTo.y - pointerPos.y / newScale) * newScale
         });
     };
 
-    const handleStageMouseDown = (e: any) => {
+
+    const handleStageMouseDown = (e: Konva.KonvaEventObject<MouseEvent>) => {
         // clicked on stage - clear selection
         if (e.target === e.target.getStage()) {
             if (e.evt.ctrlKey) {
+                const stage = e.target.getStage();
+                if (!stage) return;
+                const pos = stage.getPointerPosition();
+                if (!pos) return;
+
                 setIsSelecting(true);
-                const pos = e.target.getStage().getPointerPosition();
                 const x = (pos.x - stagePos.x) / stageScale;
                 const y = (pos.y - stagePos.y) / stageScale;
                 selectionStartRef.current = { x, y };
@@ -961,17 +929,20 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         }
 
         // clicked on transformer - do nothing
-        const clickedOnTransformer = e.target.getParent().className === 'Transformer';
+        const clickedOnTransformer = e.target.getParent()?.className === 'Transformer';
         if (clickedOnTransformer) {
             return;
         }
     };
 
-    const handleStageMouseMove = (e: any) => {
+    const handleStageMouseMove = (e: Konva.KonvaEventObject<MouseEvent>) => {
         if (!isSelecting || !selectionStartRef.current) return;
 
         const stage = e.target.getStage();
+        if (!stage) return;
         const pos = stage.getPointerPosition();
+        if (!pos) return;
+
         const x = (pos.x - stagePos.x) / stageScale;
         const y = (pos.y - stagePos.y) / stageScale;
 
@@ -986,7 +957,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         });
     };
 
-    const handleStageMouseUp = (e: any) => {
+    const handleStageMouseUp = (e: Konva.KonvaEventObject<MouseEvent>) => {
         if (isSelecting && selectionBox) {
             const box = selectionBox;
             // Find intersecting elements
@@ -1044,7 +1015,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         saveToHistory();
         setElements(prev => prev.map(el => (el.id === id ? { ...el, ...style } : el)));
         if (socket) socket.emit('element:update', { id, ...style });
-        updateThumbnailDebounced();
     };
 
     // Local-only video control (no socket sync)
@@ -1053,180 +1023,113 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         // NO socket emit, NO history save - purely local playback state
     };
 
-    const selectedElement = elements.find(el => el.id === selectedId);
+    const handleDownload = async () => {
+        const mediaElements = elements.filter(el => selectedIds.includes(el.id) && (el.type === 'image' || el.type === 'video'));
+        if (mediaElements.length === 0) return;
 
-    // Actually, let's just make Shift+Click add to selectedId array.
-    // We need to refactor selectedId to string | string[] or just string[].
-    // Let's stick to the plan: Grouping is "Phase 1" but multi-select is pre-req.
-    // I updated the plan to say "Support Shift+Click".
-    // I need to update state `selectedId`.
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/download-zip`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ elementIds: mediaElements.map(el => el.id) })
+            });
 
-    // Since I cannot change state type easily without breaking everything, I'll add `selectedIds` state.
+            if (!response.ok) throw new Error('Download failed');
 
-    /* ... (in component body) ... */
-    // const [selectedIds, setSelectedIds] = useState<string[]>([]);
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = mediaElements.length === 1 ? 'asset.zip' : 'assets.zip';
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        } catch (err) {
+            console.error('Error downloading assets:', err);
+            alert('Failed to download assets');
+        }
+    };
 
-    // But for now, let's just clean up the lint error and finalize the "Smart Linking" part which is working (code-wise).
-    // I will remove the unused variable.
+    const handleCreateGrid = async () => {
+        if (selectedIds.length < 2) return;
+        saveToHistory();
+
+        const selectedElements = elements
+            .filter(el => selectedIds.includes(el.id))
+            .sort((a, b) => (a.y - b.y) || (a.x - b.x));
+
+        const columns = 5;
+        const spacing = 20;
+
+        // Use the position of the first (top-leftmost) element as the anchor
+        const baseX = selectedElements[0].x;
+        const baseY = selectedElements[0].y;
+
+        let currentX = baseX;
+        let currentY = baseY;
+        let maxRowHeight = 0;
+        const updates: { id: string, x: number, y: number }[] = [];
+
+        selectedElements.forEach((el, index) => {
+            updates.push({ id: el.id, x: currentX, y: currentY });
+
+            maxRowHeight = Math.max(maxRowHeight, el.height);
+
+            if ((index + 1) % columns === 0) {
+                currentX = baseX;
+                currentY += maxRowHeight + spacing;
+                maxRowHeight = 0;
+            } else {
+                currentX += el.width + spacing;
+            }
+        });
+
+        // Optimistically update local state
+        setElements(prev => prev.map(el => {
+            const update = updates.find(u => u.id === el.id);
+            return update ? { ...el, x: update.x, y: update.y } : el;
+        }));
+
+        try {
+            await fetch(`${API_BASE_URL}/api/elements/batch-move`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ elements: updates })
+            });
+        } catch (err) {
+            console.error('Error creating grid:', err);
+        }
+    };
+
+
+
 
     return (
         <div style={{ flex: 1, background: '#1a1a1a', position: 'relative', overflow: 'hidden' }}>
-            <div style={{ position: 'absolute', top: '20px', right: '20px', zIndex: 100, display: 'flex', gap: '8px', alignItems: 'center' }}>
-                <button onClick={handleAddZone} style={mainButtonStyle}>Add Zone</button>
-                <button onClick={handleAddText} style={mainButtonStyle}>Add Text</button>
-                <button onClick={handleAddArrow} style={mainButtonStyle}>Add Arrow</button>
-                <button onClick={() => fileInputRef.current?.click()} style={mainButtonStyle}>Add Media</button>
-                <input type="file" multiple ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} accept="image/*,video/*" />
+            <CanvasToolbar
+                pageId={pageId}
+                selectedIds={selectedIds}
+                elements={elements}
+                chapters={chapters}
+                allPages={allPages}
+                isMoveMenuOpen={isMoveMenuOpen}
+                onToggleMoveMenu={setIsMoveMenuOpen}
+                onAddZone={handleAddZone}
+                onAddText={handleAddText}
+                onAddArrow={handleAddArrow}
+                onAddMedia={() => fileInputRef.current?.click()}
+                onUpdateStyle={handleUpdateStyle}
+                onLocalVideoControl={handleLocalVideoControl}
+                onReorder={handleReorder}
+                onDelete={handleDeleteElements}
+                onDownload={handleDownload}
+                onCreateGrid={handleCreateGrid}
+                onMoveSelectionToPage={handleMoveSelectionToPage}
+            />
+            <input type="file" multiple ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} accept="image/*,video/*" />
 
-                <div style={separatorStyle} />
-
-                <button onClick={() => setShowGrid(!showGrid)} style={{ ...mainButtonStyle, background: showGrid ? '#57606f' : '#34495e' }}>Grid</button>
-                <button onClick={() => setSnapToGrid(!snapToGrid)} style={{ ...mainButtonStyle, background: snapToGrid ? '#57606f' : '#34495e' }}>Snap</button>
-                <button onClick={() => { setStageScale(1); setStagePos({ x: 0, y: 0 }); }} style={mainButtonStyle}>Reset View</button>
-
-                {(selectedElement || selectedId) && <div style={separatorStyle} />}
-
-                {selectedElement && selectedElement.type === 'video' && (
-                    <>
-                        <button onClick={() => handleLocalVideoControl(selectedElement.id, { isMuted: !selectedElement.isMuted })} style={selectedElement.isMuted ? activeSubButtonStyle : subButtonStyle}>
-                            {selectedElement.isMuted ? 'Unmute' : 'Mute'}
-                        </button>
-                    </>
-                )}
-
-                {selectedElement && selectedElement.type === 'text' && (
-                    <>
-                        <button onClick={() => handleUpdateStyle(selectedElement.id, { fontStyle: selectedElement.fontStyle === 'bold' ? 'normal' : 'bold' })} style={{ ...subButtonStyle, fontWeight: 'bold', background: selectedElement.fontStyle === 'bold' ? activeSubButtonStyle.background : subButtonStyle.background }}>B</button>
-                        <button onClick={() => handleUpdateStyle(selectedElement.id, { fontStyle: selectedElement.fontStyle === 'italic' ? 'normal' : 'italic' })} style={{ ...subButtonStyle, fontStyle: 'italic', background: selectedElement.fontStyle === 'italic' ? activeSubButtonStyle.background : subButtonStyle.background }}>I</button>
-                        <input
-                            type="color"
-                            title="Text Color"
-                            value={selectedElement.fill || '#ffffff'}
-                            onChange={(e) => handleUpdateStyle(selectedElement.id, { fill: e.target.value })}
-                            style={{ ...subButtonStyle, width: '32px', padding: 0 }}
-                        />
-                        <select
-                            value={selectedElement.fontSize || 16}
-                            onChange={(e) => handleUpdateStyle(selectedElement.id, { fontSize: parseInt(e.target.value) })}
-                            style={subButtonStyle}
-                        >
-                            {[12, 14, 16, 20, 24, 32, 48, 64].map(s => <option key={s} value={s}>{s}px</option>)}
-                        </select>
-                    </>
-                )}
-
-
-                {selectedElement && selectedElement.type === 'arrow' && (
-                    <>
-                        <span style={{ color: 'white', fontSize: '12px', marginLeft: '5px' }}>Width:</span>
-                        <select
-                            value={selectedElement.strokeWidth || 5}
-                            onChange={(e) => handleUpdateStyle(selectedElement.id, { strokeWidth: parseInt(e.target.value) })}
-                            style={subButtonStyle}
-                        >
-                            {[1, 2, 3, 5, 8, 10, 15, 20].map(s => <option key={s} value={s}>{s}px</option>)}
-                        </select>
-                    </>
-                )}
-
-                {
-                    selectedId && (
-                        <>
-                            <button onClick={() => handleReorder('front')} style={subButtonStyle}>To Front</button>
-                            <button onClick={() => handleReorder('back')} style={subButtonStyle}>To Back</button>
-                        </>
-                    )
-                }
-
-                {selectedIds.length > 0 && (
-                    <div style={{ position: 'relative', marginLeft: '5px' }}>
-                        <button
-                            onClick={() => setIsMoveMenuOpen(!isMoveMenuOpen)}
-                            style={mainButtonStyle}
-                            title="Move selected elements to another page"
-                        >
-                            Move to Page ▾
-                        </button>
-                        {isMoveMenuOpen && (
-                            <div style={{
-                                position: 'absolute',
-                                top: '100%',
-                                right: 0,
-                                marginTop: '5px',
-                                background: '#2c3e50',
-                                border: '1px solid #34495e',
-                                borderRadius: '4px',
-                                padding: '5px',
-                                zIndex: 200,
-                                minWidth: '200px',
-                                boxShadow: '0 4px 6px rgba(0,0,0,0.3)'
-                            }}>
-                                <select
-                                    onChange={(e) => {
-                                        if (e.target.value) {
-                                            handleMoveSelectionToPage(e.target.value);
-                                        }
-                                    }}
-                                    style={{ width: '100%', padding: '6px', background: '#34495e', color: 'white', border: '1px solid #455a64', borderRadius: '3px' }}
-                                    defaultValue=""
-                                >
-                                    <option value="" disabled>Select Destination...</option>
-                                    {chapters.map(chapter => (
-                                        <optgroup key={chapter.id} label={chapter.title}>
-                                            {allPages.filter(p => p.chapter_id === chapter.id && p.id !== pageId).map(page => (
-                                                <option key={page.id} value={page.id}>{page.title}</option>
-                                            ))}
-                                        </optgroup>
-                                    ))}
-                                </select>
-                            </div>
-                        )}
-                    </div>
-                )}
-            </div >
-
-            {/* Upload Progress Panel */}
-            {uploadsInProgress.length > 0 && (
-                <div style={{
-                    position: 'absolute',
-                    bottom: '20px',
-                    right: '20px',
-                    width: '300px',
-                    background: '#2c3e50',
-                    border: '1px solid #34495e',
-                    borderRadius: '8px',
-                    padding: '12px',
-                    zIndex: 1000,
-                    boxShadow: '0 4px 15px rgba(0,0,0,0.5)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '10px'
-                }}>
-                    <div style={{ color: 'white', fontSize: '14px', fontWeight: 'bold', borderBottom: '1px solid #34495e', paddingBottom: '8px' }}>
-                        Uploads
-                    </div>
-                    {uploadsInProgress.map(upload => (
-                        <div key={upload.id} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <span style={{ color: '#ecf0f1', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '180px' }} title={upload.fileName}>
-                                    {upload.fileName}
-                                </span>
-                                <span style={{ color: upload.status === 'error' ? '#e74c3c' : '#bdc3c7', fontSize: '11px' }}>
-                                    {upload.status === 'uploading' ? `${upload.progress}%` : upload.status}
-                                </span>
-                            </div>
-                            <div style={{ width: '100%', height: '6px', background: '#34495e', borderRadius: '3px', overflow: 'hidden' }}>
-                                <div style={{
-                                    width: `${upload.progress}%`,
-                                    height: '100%',
-                                    background: upload.status === 'error' ? '#e74c3c' : (upload.status === 'completed' ? '#2ecc71' : '#3498db'),
-                                    transition: 'width 0.3s ease'
-                                }} />
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            )}
+            <UploadProgress uploads={uploadsInProgress} />
 
             {
                 editingId && (
@@ -1261,10 +1164,11 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                             background: 'white',
                             whiteSpace: 'nowrap',
                             boxShadow: '0 2px 10px rgba(0,0,0,0.2)'
-                        }}
-                    />
+                        }}></textarea>
                 )
             }
+
+            {!pageId && <NoPagePlaceholder />}
 
             <Stage
                 ref={stageRef}
@@ -1291,7 +1195,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                         const isSelected = selectedIds.includes(el.id);
 
                         // Attach ref
-                        const attachRef = (node: any) => {
+                        const attachRef = (node: Konva.Node | null) => {
                             if (elementRefs.current) {
                                 if (node) elementRefs.current[el.id] = node;
                                 else delete elementRefs.current[el.id];
@@ -1324,9 +1228,9 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                                         }
                                     }}
                                     onDragStart={handleDragStart}
-                                    onDragMove={(e: any) => handleDragMove(e, el.id)}
-                                    onDragEnd={(e: any) => handleDragEnd(el.id, e.target.x(), e.target.y())}
-                                    onTransformEnd={(e: any) => handleTransformEnd(el.id, e.target)}
+                                    onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => handleDragMove(e, el.id)}
+                                    onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => handleDragEnd(el.id, e.target.x(), e.target.y())}
+                                    onTransformEnd={(e: Konva.KonvaEventObject<Event>) => handleTransformEnd(el.id, e.target)}
                                 />
                             );
                         }
@@ -1356,10 +1260,10 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                                         }
                                     }}
                                     onDragStart={handleDragStart}
-                                    onDragMove={(e: any) => handleDragMove(e, el.id)}
-                                    onDragEnd={(e: any) => handleDragEnd(el.id, e.target.x(), e.target.y())}
+                                    onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => handleDragMove(e, el.id)}
+                                    onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => handleDragEnd(el.id, e.target.x(), e.target.y())}
                                     onDblClick={() => { setEditingId(el.id); setEditText(el.text || ''); }}
-                                    onTransformEnd={(e: any) => handleTransformEnd(el.id, e.target)}
+                                    onTransformEnd={(e: Konva.KonvaEventObject<Event>) => handleTransformEnd(el.id, e.target)}
                                 />
                             );
                         }
@@ -1390,9 +1294,9 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                                             }
                                         }}
                                         onDragStart={handleDragStart}
-                                        onDragMove={(e: any) => handleDragMove(e, el.id)}
-                                        onDragEnd={(e: any) => handleDragEnd(el.id, e.target.x(), e.target.y())}
-                                        onTransformEnd={(e: any) => handleTransformEnd(el.id, e.target)}
+                                        onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => handleDragMove(e, el.id)}
+                                        onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => handleDragEnd(el.id, e.target.x(), e.target.y())}
+                                        onTransformEnd={(e: Konva.KonvaEventObject<Event>) => handleTransformEnd(el.id, e.target)}
                                     />
                                     {isSelected && points.length >= 4 && (
                                         <>
@@ -1404,7 +1308,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                                                 stroke="white"
                                                 strokeWidth={2}
                                                 draggable
-                                                onDragMove={(e: any) => {
+                                                onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => {
                                                     handleArrowPointDrag(el.id, 0, e.target.x(), e.target.y());
                                                 }}
                                                 onDragEnd={() => handleArrowPointDragEnd(el.id)}
@@ -1417,7 +1321,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                                                 stroke="white"
                                                 strokeWidth={2}
                                                 draggable
-                                                onDragMove={(e: any) => {
+                                                onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => {
                                                     handleArrowPointDrag(el.id, (points.length / 2) - 1, e.target.x(), e.target.y());
                                                 }}
                                                 onDragEnd={() => handleArrowPointDragEnd(el.id)}
@@ -1434,7 +1338,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                                     key={el.id}
                                     ref={attachRef}
                                     id={el.id}
-                                    type={el.type as any}
+                                    type={el.type as 'image' | 'video'}
                                     x={el.x}
                                     y={el.y}
                                     width={el.width}
@@ -1442,7 +1346,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                                     url={el.url || ''}
                                     isSelected={isSelected}
                                     draggable={!editingId}
-                                    onClick={(e: any) => {
+                                    onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
                                         e.cancelBubble = true;
                                         if (e.evt.ctrlKey) {
                                             if (isSelected) {
@@ -1457,8 +1361,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                                             setSelectedIds([el.id]);
                                         }
                                     }}
-                                    onDragEnd={(e: any) => handleDragEnd(el.id, e.target.x(), e.target.y())}
-                                    onTransformEnd={(e: any) => handleTransformEnd(el.id, e.target)}
+                                    onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => handleDragEnd(el.id, e.target.x(), e.target.y())}
+                                    onTransformEnd={(e: Konva.KonvaEventObject<Event>) => handleTransformEnd(el.id, e.target)}
                                     isPlaying={el.isPlaying}
                                     isMuted={el.isMuted}
                                 />

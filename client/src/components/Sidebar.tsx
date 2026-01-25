@@ -71,6 +71,18 @@ const Sidebar: React.FC<SidebarProps> = ({
     const [pageToDelete, setPageToDelete] = React.useState<string | null>(null);
     const [pageToDuplicate, setPageToDuplicate] = React.useState<string | null>(null);
     const [chapterToDelete, setChapterToDelete] = React.useState<string | null>(null);
+    const [movingPageId, setMovingPageId] = React.useState<string | null>(null);
+
+    const handleMovePageToChapter = async (pageId: string, chapterId: string, e: React.MouseEvent) => {
+        e.stopPropagation();
+        await fetch(`${API_BASE_URL}/api/pages/${pageId}/move-chapter`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chapterId })
+        });
+        setMovingPageId(null);
+        if (onRefresh) onRefresh();
+    };
 
     const confirmDuplicatePage = async () => {
         if (!pageToDuplicate) return;
@@ -81,7 +93,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             body: JSON.stringify({ pageId: pageToDuplicate })
         });
         setPageToDuplicate(null);
-        onRefresh && onRefresh();
+        if (onRefresh) onRefresh();
     };
 
     const handleMovePage = async (pageId: string, direction: 'up' | 'down', e: React.MouseEvent) => {
@@ -101,7 +113,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             body: JSON.stringify({ order: newPages.map(p => p.id) })
         });
 
-        onRefresh && onRefresh();
+        if (onRefresh) onRefresh();
     };
 
     const handleDragStart = (e: React.DragEvent, id: string) => {
@@ -135,7 +147,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
 
         setDraggedPageId(null);
-        onRefresh && onRefresh();
+        if (onRefresh) onRefresh();
     };
 
     const confirmDeletePage = async () => {
@@ -145,7 +157,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             method: 'DELETE'
         });
         setPageToDelete(null);
-        onRefresh && onRefresh();
+        if (onRefresh) onRefresh();
     };
 
     const confirmDeleteChapter = () => {
@@ -411,24 +423,19 @@ const Sidebar: React.FC<SidebarProps> = ({
                         }}
                     >
                         {isCollapsed ? (
-                            page.thumbnail ? (
-                                <img src={page.thumbnail} style={{ width: '30px', height: '22px', borderRadius: '2px', objectFit: 'cover' }} />
-                            ) : index + 1
+                            index + 1
                         ) : (
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%' }}>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginRight: '5px' }}>
                                     <button
-                                        onClick={(e) => { handleMovePage(page.id, 'up', e); onRefresh && onRefresh(); }}
+                                        onClick={(e) => { handleMovePage(page.id, 'up', e); if (onRefresh) onRefresh(); }}
                                         style={{ fontSize: '8px', cursor: 'pointer', background: 'none', border: 'none', color: '#aaa' }}
                                     >▲</button>
                                     <button
-                                        onClick={(e) => { handleMovePage(page.id, 'down', e); onRefresh && onRefresh(); }}
+                                        onClick={(e) => { handleMovePage(page.id, 'down', e); if (onRefresh) onRefresh(); }}
                                         style={{ fontSize: '8px', cursor: 'pointer', background: 'none', border: 'none', color: '#aaa' }}
                                     >▼</button>
                                 </div>
-                                {page.thumbnail && (
-                                    <img src={page.thumbnail} style={{ width: '40px', height: '28px', borderRadius: '4px', objectFit: 'cover', border: '1px solid rgba(255,255,255,0.1)' }} />
-                                )}
                                 <div style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                     {editingPageId === page.id ? (
                                         <input
@@ -464,6 +471,15 @@ const Sidebar: React.FC<SidebarProps> = ({
                                     ) : (
                                         page.title
                                     )}
+                                </div>
+                                <div style={{ display: 'flex' }}>
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); setMovingPageId(page.id); }}
+                                        title="Move to Chapter"
+                                        style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#aaa', fontSize: '14px', padding: '0 4px' }}
+                                    >
+                                        ➔
+                                    </button>
                                 </div>
                                 <button
                                     onClick={(e) => { e.stopPropagation(); setPageToDuplicate(page.id); }}
@@ -580,6 +596,78 @@ const Sidebar: React.FC<SidebarProps> = ({
                             No
                         </button>
                     </div>
+                </div>
+            )}
+
+            {movingPageId && (
+                <div style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: '100%',
+                    background: 'rgba(0,0,0,0.8)',
+                    zIndex: 2000,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '20px',
+                    boxSizing: 'border-box',
+                    textAlign: 'center'
+                }}>
+                    <h3 style={{ color: 'white', marginBottom: '10px' }}>Move Page?</h3>
+                    <p style={{ color: '#aaa', fontSize: '0.9em', marginBottom: '20px' }}>Select destination chapter:</p>
+                    <div style={{
+                        width: '100%',
+                        maxHeight: '200px',
+                        overflowY: 'auto',
+                        background: 'rgba(255,255,255,0.05)',
+                        borderRadius: '6px',
+                        marginBottom: '20px',
+                        padding: '5px'
+                    }}>
+                        {chapters.map(ch => (
+                            <div
+                                key={ch.id}
+                                onClick={(e) => handleMovePageToChapter(movingPageId, ch.id, e)}
+                                style={{
+                                    padding: '10px',
+                                    borderRadius: '4px',
+                                    color: 'white',
+                                    cursor: 'pointer',
+                                    fontSize: '14px',
+                                    textAlign: 'left',
+                                    background: 'transparent',
+                                    marginBottom: '2px',
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center'
+                                }}
+                                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+                                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                            >
+                                {ch.title}
+                                {pages.find(p => p.id === movingPageId)?.chapter_id === ch.id && (
+                                    <span style={{ fontSize: '10px', color: 'var(--accent-color)' }}>(current)</span>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                    <button
+                        onClick={() => setMovingPageId(null)}
+                        style={{
+                            padding: '8px 16px',
+                            background: '#7f8c8d',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            width: '100%'
+                        }}
+                    >
+                        Cancel
+                    </button>
                 </div>
             )}
 

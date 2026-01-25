@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import Canvas from './components/Canvas'
 import Sidebar from './components/Sidebar'
 import { API_BASE_URL } from './config'
 import type { Chapter, Page } from './types'
 import { useSocket } from './hooks/useSocket'
 import HelpManual from './components/HelpManual'
-import { HelpCircle, Download } from 'lucide-react'
+import { HelpCircle } from 'lucide-react'
 
 
 /* ... imports */
@@ -23,9 +23,8 @@ function App() {
   const pages = allPages.filter(p => p.chapter_id === currentChapterId);
 
   // Fetch Chapters
-  const fetchChapters = () => {
+  const fetchChapters = useCallback(() => {
     fetch(`${API_BASE_URL}/api/chapters?storyboardId=default-storyboard`)
-
       .then(res => res.json())
       .then(data => {
         setChapters(data);
@@ -33,67 +32,106 @@ function App() {
           setCurrentChapterId(data[0].id);
         }
       });
-  };
+  }, [currentChapterId]);
 
-  const fetchPages = () => {
-    // If no chapter selected, maybe clear pages or fetch all?
-    // User wants "load pages accordingly".
-    // If we have chapters, we should fetch pages for current chapter.
-    // If no chapters exist (migration?), currentChapterId might be null.
-    // But we seeded default chapter.
-
-    let url = `${API_BASE_URL}/api/pages`;
-
-    // if (currentChapterId) {
-    //   url += `?chapterId=${currentChapterId}`;
-    // }
+  const fetchPages = useCallback(() => {
+    const url = `${API_BASE_URL}/api/pages`;
 
     fetch(url)
       .then(res => res.json())
       .then(data => {
         setAllPages(data);
         if (data.length > 0) {
-          const firstPageInChapter = data.find((p: any) => p.chapter_id === currentChapterId);
-          if (!currentPageId || !data.find((p: any) => p.id === currentPageId)) {
+          const firstPageInChapter = data.find((p: Page) => p.chapter_id === currentChapterId);
+          if (!currentPageId || !data.find((p: Page) => p.id === currentPageId)) {
             setCurrentPageId(firstPageInChapter ? firstPageInChapter.id : data[0].id);
           }
         } else {
           setCurrentPageId(null);
         }
       });
-  };
+  }, [currentChapterId, currentPageId]);
 
   useEffect(() => {
     fetchChapters();
     fetchPages(); // Fetch all initially
-  }, []);
+  }, [fetchChapters, fetchPages]);
 
   useEffect(() => {
     if (socket) {
       socket.on('user_count', (count: number) => {
         setConnectedUsers(count);
       });
+
+      socket.on('chapter:add', (chapter: Chapter) => {
+        setChapters(prev => [...prev].some(c => c.id === chapter.id) ? prev : [...prev, chapter]);
+      });
+
+      socket.on('chapter:update', (data: { id: string, title: string }) => {
+        setChapters(prev => prev.map(c => c.id === data.id ? { ...c, title: data.title } : c));
+      });
+
+      socket.on('chapter:delete', (data: { id: string }) => {
+        setChapters(prev => prev.filter(c => c.id !== data.id));
+        setAllPages(prev => prev.filter(p => p.chapter_id !== data.id));
+        if (currentChapterId === data.id) {
+          setCurrentChapterId(null);
+        }
+      });
+
+      socket.on('page:add', (page: Page) => {
+        setAllPages(prev => [...prev].some(p => p.id === page.id) ? prev : [...prev, page]);
+      });
+
+      socket.on('page:update', (page: Page) => {
+        setAllPages(prev => prev.map(p => p.id === page.id ? { ...p, ...page } : p));
+      });
+
+      socket.on('page:delete', (data: { id: string }) => {
+        setAllPages(prev => prev.filter(p => p.id !== data.id));
+        if (currentPageId === data.id) {
+          setCurrentPageId(null);
+        }
+      });
+
+      socket.on('pages:reorder', (data: { order: string[] }) => {
+        setAllPages(prev => {
+          const pageMap = new Map(prev.map(p => [p.id, p]));
+          const newOrder = data.order.map(id => pageMap.get(id)).filter(Boolean) as Page[];
+          return newOrder;
+        });
+      });
+
       return () => {
         socket.off('user_count');
+        socket.off('chapter:add');
+        socket.off('chapter:update');
+        socket.off('chapter:delete');
+        socket.off('page:add');
+        socket.off('page:update');
+        socket.off('page:delete');
+        socket.off('pages:reorder');
       };
     }
-  }, [socket]);
+  }, [socket, currentChapterId, currentPageId]);
 
   useEffect(() => {
     if (currentChapterId && allPages.length > 0) {
       // Find the first page of the selected chapter
-      const firstPageInChapter = allPages.find((p: any) => p.chapter_id === currentChapterId);
+      const firstPageInChapter = allPages.find((p: Page) => p.chapter_id === currentChapterId);
 
       // Check if the current page is already in the selected chapter
-      const isCurrentPageInChapter = allPages.find(p => p.id === currentPageId && p.chapter_id === currentChapterId);
+      const isCurrentPageInChapter = allPages.find((p: Page) => p.id === currentPageId && p.chapter_id === currentChapterId);
 
       // Only switch if we are NOT already on a page belonging to this chapter
       if (!isCurrentPageInChapter) {
-        if (firstPageInChapter) {
-          setCurrentPageId(firstPageInChapter.id);
-        } else {
-          setCurrentPageId(null);
-        }
+        setTimeout(() => {
+          if (firstPageInChapter) {
+            setCurrentPageId(firstPageInChapter.id);
+          } else {
+            setCurrentPageId(null);
+          }
+        }, 0);
       }
     }
   }, [currentChapterId, allPages, currentPageId]);
@@ -188,6 +226,7 @@ function App() {
       });
   };
 
+  /*
   const handleExport = () => {
     const state = {
       chapters,
@@ -205,6 +244,7 @@ function App() {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
+  */
 
   return (
     <div className="App" style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden' }}>
@@ -248,6 +288,7 @@ function App() {
         zIndex: 100,
         transition: 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
       }}>
+        {/* 
         <button
           onClick={handleExport}
           style={{
@@ -271,6 +312,7 @@ function App() {
           <Download size={18} />
           Export
         </button>
+        */}
         <button
           onClick={() => setIsManualOpen(true)}
           style={{

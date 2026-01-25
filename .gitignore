@@ -21,3 +21,5 @@ server/dist
 server/dist-ssr
 server/*.local
 server/storyboard.db
+client/lint_output.txt
+server/node_modules/.package-lock.json
