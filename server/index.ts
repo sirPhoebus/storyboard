@@ -835,12 +835,17 @@ if (process.env.NODE_ENV === 'production') {
     const clientDistPath = path.join(process.cwd(), '..', 'client', 'dist');
     app.use(express.static(clientDistPath));
 
-    app.get('/:path*', (req: any, res: any) => {
+    // Use middleware for catch-all to avoid path-to-regexp v8 issues in Express 5
+    app.use((req: any, res: any, next: any) => {
+        // Only handle GET requests that haven't been handled yet
+        if (req.method !== 'GET') return next();
+
         // Don't serve index.html for missing assets or API calls
         if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
             console.log(`🚫 Asset/API not found: ${req.path}`);
             return res.status(404).send('Not Found');
         }
+
         res.sendFile(path.join(clientDistPath, 'index.html'));
     });
 }
