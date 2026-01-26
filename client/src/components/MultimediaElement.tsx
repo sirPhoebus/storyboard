@@ -156,9 +156,18 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
 
     return (
         <Group
-            ref={ref}
+            ref={(node) => {
+                if (typeof ref === 'function') ref(node);
+                else if (ref) ref.current = node;
+                if (node) {
+                    // @ts-ignore - store inner ref for reset logic
+                    node._innerImage = imageRef.current;
+                }
+            }}
             x={x}
             y={y}
+            width={width}
+            height={height}
             draggable={draggable}
             onDragStart={onDragStart}
             onDragMove={onDragMove}
@@ -177,7 +186,7 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
                 stroke={isSelected ? '#3498db' : undefined}
                 strokeWidth={isSelected ? 4 : 0}
             />
-            {(isHovered || rating > 0) && (
+            {isHovered && (
                 <Group>
                     <Rect
                         x={width - 5 * 30 - 20}

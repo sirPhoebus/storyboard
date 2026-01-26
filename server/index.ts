@@ -608,6 +608,16 @@ app.get('/api/batch/tasks', (req: any, res: any) => {
     }
 });
 
+const getDimensionsFromAspectRatio = (aspectRatio?: string) => {
+    switch (aspectRatio) {
+        case '21:9': return { width: 700, height: 300 };
+        case '9:16': return { width: 300, height: 533 };
+        case '1:1': return { width: 400, height: 400 };
+        case '16:9':
+        default: return { width: 533, height: 300 };
+    }
+};
+
 app.post('/api/videos/sync', (req: any, res: any) => {
     const dataDir = process.env.DATA_DIR || process.cwd();
     const generatedDir = path.join(dataDir, 'uploads', 'generated');
