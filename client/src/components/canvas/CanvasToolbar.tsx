@@ -21,6 +21,7 @@ interface CanvasToolbarProps {
     onDelete: (ids: string[]) => void;
     onDownload: () => void;
     onCreateGrid: () => void;
+    onSyncVideos?: () => void;
     onMoveSelectionToPage: (targetPageId: string) => void;
     onResetSize: (ids: string[]) => void;
     onSaveView: () => void;
@@ -46,6 +47,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
     onDelete,
     onDownload,
     onCreateGrid,
+    onSyncVideos,
     onMoveSelectionToPage,
 
     onResetSize,
@@ -131,6 +133,16 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
                 disabled={!pageId}
                 title={pageId ? "Add Media" : noPageMessage}
             >Add Media</button>
+
+            {allPages.find(p => p.id === pageId)?.type === 'videos' && onSyncVideos && (
+                <button
+                    onClick={onSyncVideos}
+                    style={{ ...mainButtonStyle, background: '#2ecc71' }}
+                    title="Scan folder for new videos and add to canvas"
+                >
+                    Sync Videos 🔄
+                </button>
+            )}
 
             {pageId && (
                 <button

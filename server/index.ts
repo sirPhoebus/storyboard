@@ -607,23 +607,57 @@ app.get('/api/batch/tasks', (req: any, res: any) => {
     }
 });
 
-app.get('/api/videos/list', (req: any, res: any) => {
+app.post('/api/videos/sync', (req: any, res: any) => {
     const dataDir = process.env.DATA_DIR || process.cwd();
     const generatedDir = path.join(dataDir, 'uploads', 'generated');
+    const storyboardId = 'default-storyboard';
 
     if (!fs.existsSync(generatedDir)) {
-        return res.json([]);
+        return res.json({ success: true, added: 0 });
     }
 
-    const files = fs.readdirSync(generatedDir)
-        .filter(file => file.endsWith('.mp4'))
-        .map(file => ({
-            url: `/uploads/generated/${file}`,
-            name: file,
-            id: file
-        }));
+    try {
+        const videosPage = db.prepare("SELECT id FROM pages WHERE storyboard_id = ? AND type = 'videos'").get(storyboardId) as { id: string } | undefined;
+        if (!videosPage) return res.status(404).json({ error: 'Videos page not found' });
 
-    res.json(files);
+        const existingElements = db.prepare("SELECT content FROM elements WHERE page_id = ? AND type = 'video'").all() as { content: string }[];
+        const existingUrls = new Set(existingElements.map(e => JSON.parse(e.content).url));
+
+        const files = fs.readdirSync(generatedDir).filter(file => file.endsWith('.mp4'));
+        let addedCount = 0;
+
+        const countResult = db.prepare('SELECT COUNT(*) as count FROM elements WHERE page_id = ?').get(videosPage.id) as { count: number };
+        let currentCount = countResult.count;
+
+        for (const file of files) {
+            const url = `/uploads/generated/${file}`;
+            if (!existingUrls.has(url)) {
+                const elementId = crypto.randomUUID();
+                const x = 50 + (currentCount % 3) * 450;
+                const y = 50 + Math.floor(currentCount / 3) * 350;
+                const content = { url, width: 400, height: 300 };
+
+                db.prepare('INSERT INTO elements (id, page_id, type, x, y, width, height, content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+                    elementId, videosPage.id, 'video', x, y, 400, 300, JSON.stringify(content)
+                );
+
+                io.emit('element:add', {
+                    id: elementId,
+                    pageId: videosPage.id,
+                    type: 'video',
+                    x, y, width: 400, height: 300,
+                    content
+                });
+
+                currentCount++;
+                addedCount++;
+            }
+        }
+
+        res.json({ success: true, added: addedCount });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.post('/api/batch/add-frame', (req: any, res: any) => {
@@ -734,7 +768,42 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
                 !!task.audio_enabled,
                 (status, videoUrl) => {
                     const updates: any = { status };
-                    if (videoUrl) updates.generated_video_url = videoUrl;
+                    if (videoUrl) {
+                        updates.generated_video_url = videoUrl;
+                        // Automatically add to "Videos" page
+                        try {
+                            const storyboardId = 'default-storyboard';
+                            const videosPage = db.prepare("SELECT id FROM pages WHERE storyboard_id = ? AND type = 'videos'").get(storyboardId) as { id: string } | undefined;
+
+                            if (videosPage) {
+                                const elementId = crypto.randomUUID();
+                                const count = (db.prepare('SELECT COUNT(*) as count FROM elements WHERE page_id = ?').get(videosPage.id) as any).count;
+                                const x = 50 + (count % 3) * 450;
+                                const y = 50 + Math.floor(count / 3) * 350;
+
+                                const content = {
+                                    url: videoUrl,
+                                    width: 400,
+                                    height: 300
+                                };
+
+                                db.prepare('INSERT INTO elements (id, page_id, type, x, y, width, height, content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+                                    elementId, videosPage.id, 'video', x, y, 400, 300, JSON.stringify(content)
+                                );
+
+                                io.emit('element:add', {
+                                    id: elementId,
+                                    pageId: videosPage.id,
+                                    type: 'video',
+                                    x, y, width: 400, height: 300,
+                                    content
+                                });
+                                console.log(`🎬 [DB] Auto-added video ${videoUrl} to page ${videosPage.id}`);
+                            }
+                        } catch (err) {
+                            console.error('❌ Failed to auto-add video to canvas:', err);
+                        }
+                    }
 
                     const fields: string[] = [];
                     const values: any[] = [];

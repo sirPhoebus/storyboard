@@ -136,6 +136,20 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     }, [pageId, loadViewport]);
 
     useEffect(() => {
+        const currentPage = allPages.find(p => p.id === pageId);
+        if (pageId && currentPage?.type === 'videos') {
+            fetch(`${API_BASE_URL}/api/videos/sync`, { method: 'POST' })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.added > 0) {
+                        console.log(`✅ Synced ${data.added} new videos to canvas`);
+                    }
+                })
+                .catch(err => console.error('Failed to sync videos:', err));
+        }
+    }, [pageId, allPages]);
+
+    useEffect(() => {
         if (!socket) return;
 
         socket.on('element:move', (data: { id: string, x: number, y: number }) => {
@@ -1215,6 +1229,17 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             .catch(err => console.error('Failed to add frame to batch:', err));
     };
 
+    const handleSyncVideos = useCallback(() => {
+        fetch(`${API_BASE_URL}/api/videos/sync`, { method: 'POST' })
+            .then(res => res.json())
+            .then(data => {
+                if (data.added > 0) {
+                    console.log(`✅ Synced ${data.added} new videos to canvas`);
+                }
+            })
+            .catch(err => console.error('Failed to sync videos:', err));
+    }, []);
+
     return (
         <div
             style={{ flex: 1, background: '#1a1a1a', position: 'relative', overflow: 'hidden' }}
@@ -1238,6 +1263,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 onDelete={handleDeleteElements}
                 onDownload={handleDownload}
                 onCreateGrid={handleCreateGrid}
+                onSyncVideos={handleSyncVideos}
                 onMoveSelectionToPage={handleMoveSelectionToPage}
                 onResetSize={handleResetSize}
                 onSaveView={handleSaveView}
