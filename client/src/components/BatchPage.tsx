@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../config';
 import type { BatchTask } from '../types';
 import { Socket } from 'socket.io-client';
-import { Play, Trash2, Volume2, VolumeX, Clock, ChevronLeft, Hourglass } from 'lucide-react';
+import { Play, Trash2, Volume2, VolumeX, Clock, ChevronLeft, Hourglass, Download } from 'lucide-react';
 
 interface BatchPageProps {
     onBack: () => void;
@@ -108,10 +108,13 @@ const BatchPage: React.FC<BatchPageProps> = ({ onBack, socket }) => {
                             {task.generated_video_url && task.status === 'completed' ? (
                                 <div style={{ width: '252px', height: '80px', borderRadius: '8px', overflow: 'hidden', background: '#000', border: '2px solid #3498db', position: 'relative' }}>
                                     <video
-                                        src={`${API_BASE_URL}${task.generated_video_url}`}
                                         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                                         controls
-                                    />
+                                        playsInline
+                                    >
+                                        <source src={`${API_BASE_URL}${task.generated_video_url}`} type="video/mp4" />
+                                        Your browser does not support the video tag.
+                                    </video>
                                 </div>
                             ) : (
                                 <>
@@ -219,6 +222,20 @@ const BatchPage: React.FC<BatchPageProps> = ({ onBack, socket }) => {
 
                         {/* Actions */}
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {task.generated_video_url && task.status === 'completed' && (
+                                <a
+                                    href={`${API_BASE_URL}${task.generated_video_url}`}
+                                    download
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{ background: 'transparent', border: 'none', color: '#666', cursor: 'pointer', padding: '10px', borderRadius: '12px', transition: 'all 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                    onMouseOver={(e) => (e.currentTarget.style.color = '#3498db')}
+                                    onMouseOut={(e) => (e.currentTarget.style.color = '#666')}
+                                    title="Download video"
+                                >
+                                    <Download size={24} />
+                                </a>
+                            )}
                             <button
                                 onClick={() => handleDeleteTask(task.id)}
                                 style={{ background: 'transparent', border: 'none', color: '#666', cursor: 'pointer', padding: '10px', borderRadius: '12px', transition: 'all 0.2s' }}

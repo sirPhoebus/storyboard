@@ -6,6 +6,7 @@ import type { Chapter, Page } from './types'
 import { useSocket } from './hooks/useSocket'
 import HelpManual from './components/HelpManual'
 import BatchPage from './components/BatchPage'
+import VideoGalleryPage from './components/VideoGalleryPage'
 import { HelpCircle, Layers } from 'lucide-react'
 
 
@@ -271,15 +272,19 @@ function App() {
       />
 
       {view === 'canvas' ? (
-        <Canvas
-          pageId={currentPageId}
-          isSidebarCollapsed={isSidebarCollapsed}
-          sidebarWidth={sidebarWidth}
-          chapters={chapters}
-          allPages={allPages}
-          onSelectPage={handlePageSelection}
-          socket={socket}
-        />
+        allPages.find(p => p.id === currentPageId)?.type === 'videos' ? (
+          <VideoGalleryPage />
+        ) : (
+          <Canvas
+            pageId={currentPageId}
+            isSidebarCollapsed={isSidebarCollapsed}
+            sidebarWidth={sidebarWidth}
+            chapters={chapters}
+            allPages={allPages}
+            onSelectPage={handlePageSelection}
+            socket={socket}
+          />
+        )
       ) : (
         <BatchPage
           onBack={() => setView('canvas')}

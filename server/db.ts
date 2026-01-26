@@ -17,9 +17,11 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS pages (
     id TEXT PRIMARY KEY,
     storyboard_id TEXT NOT NULL,
+    chapter_id TEXT,
     title TEXT NOT NULL,
     order_index INTEGER NOT NULL,
     thumbnail TEXT,
+    type TEXT DEFAULT 'normal',
     FOREIGN KEY (storyboard_id) REFERENCES storyboards (id) ON DELETE CASCADE
   );
 
@@ -103,6 +105,12 @@ try {
   // Columns already exist
 }
 
+try {
+  db.exec('ALTER TABLE pages ADD COLUMN type TEXT DEFAULT "normal"');
+} catch (e) {
+  // Column already exists
+}
+
 // Seed initial data if empty
 const storyboardCount = db.prepare('SELECT COUNT(*) as count FROM storyboards').get() as { count: number };
 if (storyboardCount.count === 0) {
@@ -152,6 +160,26 @@ if (storyboardCount.count === 0) {
     const updatePage = db.prepare('UPDATE pages SET chapter_id = ? WHERE id = ?');
     for (const page of pagesWithoutChapter) {
       updatePage.run(defaultChapter.id, page.id);
+    }
+  }
+
+  // Ensure every first chapter has a "Videos" page
+  const storyboards = db.prepare('SELECT id FROM storyboards').all() as { id: string }[];
+  for (const sb of storyboards) {
+    const firstChapter = db.prepare('SELECT id FROM chapters WHERE storyboard_id = ? ORDER BY order_index ASC LIMIT 1').get(sb.id) as { id: string } | undefined;
+    if (firstChapter) {
+      const hasVideosPage = db.prepare('SELECT id FROM pages WHERE chapter_id = ? AND type = "videos"').get(firstChapter.id);
+      if (!hasVideosPage) {
+        console.log(`🎬 [DB] Creating system Videos page for chapter ${firstChapter.id}`);
+        db.prepare('INSERT INTO pages (id, storyboard_id, chapter_id, title, order_index, type) VALUES (?, ?, ?, ?, ?, ?)').run(
+          `videos-${firstChapter.id}`,
+          sb.id,
+          firstChapter.id,
+          'Videos',
+          -1, // Always at the top
+          'videos'
+        );
+      }
     }
   }
 }

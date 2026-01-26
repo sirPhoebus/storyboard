@@ -104,6 +104,13 @@ app.patch('/api/chapters/:id', (req: any, res: any) => {
 
 app.delete('/api/chapters/:id', (req: any, res: any) => {
     const chapterId = req.params.id;
+
+    // Prevent deletion of chapters containing system pages
+    const hasSystemPage = db.prepare('SELECT id FROM pages WHERE chapter_id = ? AND type = "videos"').get(chapterId);
+    if (hasSystemPage) {
+        return res.status(403).json({ error: 'Chapters containing system pages cannot be deleted' });
+    }
+
     const transaction = db.transaction(() => {
         const pages = db.prepare('SELECT id FROM pages WHERE chapter_id = ?').all(chapterId) as { id: string }[];
         for (const page of pages) {
@@ -123,14 +130,21 @@ app.delete('/api/chapters/:id', (req: any, res: any) => {
 });
 
 app.get('/api/pages', (req: any, res: any) => {
-    const { chapterId } = req.query;
+    const { storyboardId, chapterId } = req.query;
+    if (!storyboardId) return res.status(400).json({ error: 'storyboardId required' });
+
+    let query = 'SELECT * FROM pages WHERE storyboard_id = ?';
+    const params = [storyboardId];
+
     if (chapterId) {
-        const pages = db.prepare('SELECT * FROM pages WHERE chapter_id = ? ORDER BY order_index ASC').all(chapterId);
-        res.json(pages);
-    } else {
-        const pages = db.prepare('SELECT * FROM pages ORDER BY order_index ASC').all();
-        res.json(pages);
+        query += ' AND chapter_id = ?';
+        params.push(chapterId);
     }
+
+    query += ' ORDER BY order_index ASC';
+
+    const pages = db.prepare(query).all(...params);
+    res.json(pages);
 });
 
 app.get('/api/elements/:pageId', (req: any, res: any) => {
@@ -400,6 +414,12 @@ const hardDeleteAssets = (ids: string[]) => {
 app.delete('/api/pages/:id', (req: any, res: any) => {
     const pageId = req.params.id;
 
+    // Prevent deletion of system pages
+    const page = db.prepare('SELECT type FROM pages WHERE id = ?').get(pageId) as any;
+    if (page?.type === 'videos') {
+        return res.status(403).json({ error: 'System pages cannot be deleted' });
+    }
+
     // Get all element IDs for this page to hard delete their assets
     const elements = db.prepare('SELECT id FROM elements WHERE page_id = ?').all(pageId) as { id: string }[];
     const elementIds = elements.map(e => e.id);
@@ -585,6 +605,25 @@ app.get('/api/batch/tasks', (req: any, res: any) => {
     } catch (err: any) {
         res.status(500).json({ error: err.message });
     }
+});
+
+app.get('/api/videos/list', (req: any, res: any) => {
+    const dataDir = process.env.DATA_DIR || process.cwd();
+    const generatedDir = path.join(dataDir, 'uploads', 'generated');
+
+    if (!fs.existsSync(generatedDir)) {
+        return res.json([]);
+    }
+
+    const files = fs.readdirSync(generatedDir)
+        .filter(file => file.endsWith('.mp4'))
+        .map(file => ({
+            url: `/uploads/generated/${file}`,
+            name: file,
+            id: file
+        }));
+
+    res.json(files);
 });
 
 app.post('/api/batch/add-frame', (req: any, res: any) => {

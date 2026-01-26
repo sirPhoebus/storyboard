@@ -24,13 +24,15 @@ export class KlingService {
 
     // Helper to download video from URL to local storage
     private static async downloadVideo(url: string): Promise<string> {
-        const uploadsDir = path.join(process.cwd(), 'uploads', 'generated');
-        if (!fs.existsSync(uploadsDir)) {
-            fs.mkdirSync(uploadsDir, { recursive: true });
+        const dataDir = process.env.DATA_DIR || process.cwd();
+        const generatedDir = path.join(dataDir, 'uploads', 'generated');
+
+        if (!fs.existsSync(generatedDir)) {
+            fs.mkdirSync(generatedDir, { recursive: true });
         }
 
         const fileName = `${crypto.randomUUID()}.mp4`;
-        const filePath = path.join(uploadsDir, fileName);
+        const filePath = path.join(generatedDir, fileName);
 
         const response = await fetch(url);
         if (!response.ok) throw new Error(`Failed to fetch video: ${response.statusText}`);

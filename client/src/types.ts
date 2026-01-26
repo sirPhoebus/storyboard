@@ -36,6 +36,7 @@ export interface Page {
     chapter_id: string;
     storyboardId: string;
     thumbnail?: string;
+    type: 'normal' | 'videos';
     viewport_x?: number;
     viewport_y?: number;
     viewport_scale?: number;

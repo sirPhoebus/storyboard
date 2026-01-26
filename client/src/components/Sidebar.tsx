@@ -1,7 +1,7 @@
 import React from 'react';
 import { API_BASE_URL } from '../config';
 import type { Page, Chapter } from '../types';
-import { Clapperboard } from 'lucide-react';
+import { Clapperboard, Film } from 'lucide-react';
 
 
 interface SidebarProps {
@@ -386,7 +386,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                         key={page.id}
                         onClick={() => !editingPageId && onSelectPage(page.id)}
                         onDoubleClick={() => {
-                            if (!isCollapsed) {
+                            if (!isCollapsed && page.type !== 'videos') {
                                 setEditingPageId(page.id);
                                 setEditTitle(page.title);
                             }
@@ -411,7 +411,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                             position: 'relative',
                             opacity: draggedPageId === page.id ? 0.5 : 1
                         }}
-                        draggable={!editingPageId}
+                        draggable={!editingPageId && page.type !== 'videos'}
                         onDragStart={(e) => handleDragStart(e, page.id)}
                         onDragOver={handleDragOver}
                         onDrop={(e) => handleDrop(e, page.id)}
@@ -436,7 +436,8 @@ const Sidebar: React.FC<SidebarProps> = ({
                                         style={{ fontSize: '8px', cursor: 'pointer', background: 'none', border: 'none', color: '#aaa' }}
                                     >▼</button>
                                 </div>
-                                <div style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                <div style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    {page.type === 'videos' && <Film size={14} color="var(--accent-color)" />}
                                     {editingPageId === page.id ? (
                                         <input
                                             autoFocus
@@ -472,29 +473,33 @@ const Sidebar: React.FC<SidebarProps> = ({
                                         page.title
                                     )}
                                 </div>
-                                <div style={{ display: 'flex' }}>
-                                    <button
-                                        onClick={(e) => { e.stopPropagation(); setMovingPageId(page.id); }}
-                                        title="Move to Chapter"
-                                        style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#aaa', fontSize: '14px', padding: '0 4px' }}
-                                    >
-                                        ➔
-                                    </button>
-                                </div>
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); setPageToDuplicate(page.id); }}
-                                    title="Duplicate"
-                                    style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#aaa', fontSize: '16px' }}
-                                >
-                                    ❐
-                                </button>
-                                <button
-                                    onClick={(e) => { e.stopPropagation(); setPageToDelete(page.id); }}
-                                    title="Delete"
-                                    style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#e74c3c', fontSize: '14px', marginLeft: '2px' }}
-                                >
-                                    ×
-                                </button>
+                                {page.type !== 'videos' && (
+                                    <>
+                                        <div style={{ display: 'flex' }}>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); setMovingPageId(page.id); }}
+                                                title="Move to Chapter"
+                                                style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#aaa', fontSize: '14px', padding: '0 4px' }}
+                                            >
+                                                ➔
+                                            </button>
+                                        </div>
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); setPageToDuplicate(page.id); }}
+                                            title="Duplicate"
+                                            style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#aaa', fontSize: '16px' }}
+                                        >
+                                            ❐
+                                        </button>
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); setPageToDelete(page.id); }}
+                                            title="Delete"
+                                            style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#e74c3c', fontSize: '14px', marginLeft: '2px' }}
+                                        >
+                                            ×
+                                        </button>
+                                    </>
+                                )}
                             </div>
                         )}
                     </div>
