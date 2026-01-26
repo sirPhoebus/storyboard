@@ -162,25 +162,26 @@ if (storyboardCount.count === 0) {
       updatePage.run(defaultChapter.id, page.id);
     }
   }
+}
 
-  // Global Migration/Consistency: Ensure every storyboard has a "Videos" page in its first chapter
-  const allStoryboards = db.prepare('SELECT id FROM storyboards').all() as { id: string }[];
-  for (const sb of allStoryboards) {
-    const firstChapter = db.prepare('SELECT id FROM chapters WHERE storyboard_id = ? ORDER BY order_index ASC LIMIT 1').get(sb.id) as { id: string } | undefined;
-    if (firstChapter) {
-      const hasVideosPage = db.prepare('SELECT id FROM pages WHERE chapter_id = ? AND type = "videos"').get(firstChapter.id);
-      if (!hasVideosPage) {
-        console.log(`🎬 [DB] Creating system Videos page for chapter ${firstChapter.id}`);
-        db.prepare('INSERT INTO pages (id, storyboard_id, chapter_id, title, order_index, type) VALUES (?, ?, ?, ?, ?, ?)').run(
-          `videos-${firstChapter.id}`,
-          sb.id,
-          firstChapter.id,
-          'Videos',
-          -1, // Always at the top
-          'videos'
-        );
-      }
+// Global Migration/Consistency: Ensure every storyboard has a "Videos" page in its first chapter
+const allStoryboards = db.prepare('SELECT id FROM storyboards').all() as { id: string }[];
+for (const sb of allStoryboards) {
+  const firstChapter = db.prepare('SELECT id FROM chapters WHERE storyboard_id = ? ORDER BY order_index ASC LIMIT 1').get(sb.id) as { id: string } | undefined;
+  if (firstChapter) {
+    const hasVideosPage = db.prepare('SELECT id FROM pages WHERE chapter_id = ? AND type = "videos"').get(firstChapter.id);
+    if (!hasVideosPage) {
+      console.log(`🎬 [DB] Creating system Videos page for chapter ${firstChapter.id}`);
+      db.prepare('INSERT INTO pages (id, storyboard_id, chapter_id, title, order_index, type) VALUES (?, ?, ?, ?, ?, ?)').run(
+        `videos-${firstChapter.id}`,
+        sb.id,
+        firstChapter.id,
+        'Videos',
+        -1, // Always at the top
+        'videos'
+      );
     }
   }
+}
 
-  export default db;
+export default db;
