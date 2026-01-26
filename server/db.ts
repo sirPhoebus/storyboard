@@ -169,7 +169,7 @@ const allStoryboards = db.prepare('SELECT id FROM storyboards').all() as { id: s
 for (const sb of allStoryboards) {
   const firstChapter = db.prepare('SELECT id FROM chapters WHERE storyboard_id = ? ORDER BY order_index ASC LIMIT 1').get(sb.id) as { id: string } | undefined;
   if (firstChapter) {
-    const hasVideosPage = db.prepare('SELECT id FROM pages WHERE chapter_id = ? AND type = "videos"').get(firstChapter.id);
+    const hasVideosPage = db.prepare("SELECT id FROM pages WHERE chapter_id = ? AND type = 'videos'").get(firstChapter.id);
     if (!hasVideosPage) {
       console.log(`🎬 [DB] Creating system Videos page for chapter ${firstChapter.id}`);
       db.prepare('INSERT INTO pages (id, storyboard_id, chapter_id, title, order_index, type) VALUES (?, ?, ?, ?, ?, ?)').run(

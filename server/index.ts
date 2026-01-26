@@ -106,7 +106,7 @@ app.delete('/api/chapters/:id', (req: any, res: any) => {
     const chapterId = req.params.id;
 
     // Prevent deletion of chapters containing system pages
-    const hasSystemPage = db.prepare('SELECT id FROM pages WHERE chapter_id = ? AND type = "videos"').get(chapterId);
+    const hasSystemPage = db.prepare("SELECT id FROM pages WHERE chapter_id = ? AND type = 'videos'").get(chapterId);
     if (hasSystemPage) {
         return res.status(403).json({ error: 'Chapters containing system pages cannot be deleted' });
     }
