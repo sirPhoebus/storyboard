@@ -17,7 +17,11 @@ const VideoGalleryPage: React.FC = () => {
         fetch(`${API_BASE_URL}/api/videos/list`)
             .then(res => res.json())
             .then(data => {
-                setVideos(data);
+                if (Array.isArray(data)) {
+                    setVideos(data);
+                } else {
+                    console.error('API Error: Expected array for videos, got:', data);
+                }
                 setLoading(false);
             })
             .catch(err => {

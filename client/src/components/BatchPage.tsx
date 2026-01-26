@@ -17,7 +17,11 @@ const BatchPage: React.FC<BatchPageProps> = ({ onBack, socket }) => {
         fetch(`${API_BASE_URL}/api/batch/tasks`)
             .then(res => res.json())
             .then(data => {
-                setTasks(data);
+                if (Array.isArray(data)) {
+                    setTasks(data);
+                } else {
+                    console.error('API Error: Expected array for batch tasks, got:', data);
+                }
                 setLoading(false);
             })
             .catch(err => console.error('Failed to fetch batch tasks:', err));

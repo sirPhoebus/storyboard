@@ -30,6 +30,10 @@ function App() {
     fetch(`${API_BASE_URL}/api/chapters?storyboardId=default-storyboard`)
       .then(res => res.json())
       .then(data => {
+        if (!Array.isArray(data)) {
+          console.error('API Error: Expected array for chapters, got:', data);
+          return;
+        }
         setChapters(data);
         if (data.length > 0 && !currentChapterId) {
           setCurrentChapterId(data[0].id);
@@ -38,11 +42,15 @@ function App() {
   }, [currentChapterId]);
 
   const fetchPages = useCallback(() => {
-    const url = `${API_BASE_URL}/api/pages`;
+    const url = `${API_BASE_URL}/api/pages?storyboardId=default-storyboard`;
 
     fetch(url)
       .then(res => res.json())
       .then(data => {
+        if (!Array.isArray(data)) {
+          console.error('API Error: Expected array for pages, got:', data);
+          return;
+        }
         setAllPages(data);
         if (data.length > 0) {
           const firstPageInChapter = data.find((p: Page) => p.chapter_id === currentChapterId);
