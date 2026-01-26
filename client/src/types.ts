@@ -49,6 +49,7 @@ export interface BatchTask {
     prompt: string;
     duration: number;
     audio_enabled: boolean;
+    aspect_ratio: '16:9' | '9:16' | '1:1' | '21:9';
     status: 'pending' | 'generating' | 'completed' | 'failed';
     generated_video_url?: string;
     created_at: string;

@@ -49,7 +49,8 @@ export class KlingService {
         prompt: string,
         frameUrl?: string,
         duration: '5' | '10' = '5',
-        sound: boolean = false
+        sound: boolean = false,
+        aspectRatio: string = '16:9'
     ): Promise<string> {
 
         let finalImageUrl = "";
@@ -81,7 +82,7 @@ export class KlingService {
 
         const payload: any = {
             prompt: prompt,
-            aspect_ratio: "16:9",
+            aspect_ratio: aspectRatio,
             duration: duration,
             sound: sound
         };
@@ -136,6 +137,7 @@ export class KlingService {
         prompt: string,
         duration: '5' | '10',
         sound: boolean,
+        aspectRatio: string,
         onStatusUpdate?: (status: string, videoUrl?: string) => void
     ): Promise<string> {
 
@@ -146,7 +148,8 @@ export class KlingService {
                 prompt || "Cinematic high quality video",
                 startFrameUrl,
                 duration,
-                sound
+                sound,
+                aspectRatio
             );
 
             console.log(`✓ [Kling] Task submitted: ${taskId}`);

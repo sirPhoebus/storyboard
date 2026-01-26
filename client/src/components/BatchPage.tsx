@@ -204,6 +204,26 @@ const BatchPage: React.FC<BatchPageProps> = ({ onBack, socket }) => {
                                     {task.audio_enabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
                                     Audio {task.audio_enabled ? 'ON' : 'OFF'}
                                 </button>
+                                <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '4px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                    {['16:9', '9:16', '1:1', '21:9'].map(ar => (
+                                        <button
+                                            key={ar}
+                                            onClick={() => handleUpdateTask(task.id, { aspect_ratio: ar as any })}
+                                            style={{
+                                                padding: '6px 12px',
+                                                borderRadius: '8px',
+                                                border: 'none',
+                                                background: task.aspect_ratio === ar ? '#3498db' : 'transparent',
+                                                color: task.aspect_ratio === ar ? 'white' : '#888',
+                                                fontSize: '11px',
+                                                fontWeight: 600,
+                                                cursor: 'pointer'
+                                            }}
+                                        >
+                                            {ar}
+                                        </button>
+                                    ))}
+                                </div>
                                 <div style={{
                                     marginLeft: 'auto',
                                     fontSize: '11px',

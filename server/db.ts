@@ -33,10 +33,17 @@ db.exec(`
     duration INTEGER DEFAULT 5,
     audio_enabled INTEGER DEFAULT 0,
     status TEXT DEFAULT 'pending',
+    aspect_ratio TEXT DEFAULT '16:9',
     generated_video_url TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
+
+try {
+  db.exec('ALTER TABLE batch_tasks ADD COLUMN aspect_ratio TEXT DEFAULT "16:9"');
+} catch (e) {
+  // Column already exists
+}
 
 try {
   db.exec('ALTER TABLE batch_tasks ADD COLUMN generated_video_url TEXT');

@@ -600,7 +600,8 @@ app.get('/api/batch/tasks', (req: any, res: any) => {
         const tasks = db.prepare('SELECT * FROM batch_tasks ORDER BY created_at DESC').all();
         res.json(tasks.map((t: any) => ({
             ...t,
-            audio_enabled: !!t.audio_enabled
+            audio_enabled: !!t.audio_enabled,
+            aspect_ratio: t.aspect_ratio || '16:9'
         })));
     } catch (err: any) {
         res.status(500).json({ error: err.message });
@@ -685,7 +686,7 @@ app.post('/api/batch/add-frame', (req: any, res: any) => {
             res.json(updated);
         } else {
             // 2. Create a new row
-            db.prepare(`INSERT INTO batch_tasks (id, ${columnToFill}) VALUES (?, ?)`).run(id, url);
+            db.prepare(`INSERT INTO batch_tasks (id, ${columnToFill}, aspect_ratio) VALUES (?, ?, ?)`).run(id, url, '16:9');
             const newTask = {
                 id,
                 [columnToFill]: url,
@@ -693,6 +694,7 @@ app.post('/api/batch/add-frame', (req: any, res: any) => {
                 prompt: '',
                 duration: 5,
                 audio_enabled: false,
+                aspect_ratio: '16:9',
                 status: 'pending',
                 created_at: new Date().toISOString()
             };
@@ -705,13 +707,14 @@ app.post('/api/batch/add-frame', (req: any, res: any) => {
 });
 
 app.patch('/api/batch/tasks/:id', (req: any, res: any) => {
-    const { prompt, duration, audio_enabled, status } = req.body;
+    const { prompt, duration, audio_enabled, aspect_ratio, status } = req.body;
     const updates: string[] = [];
     const values: any[] = [];
 
     if (prompt !== undefined) { updates.push('prompt = ?'); values.push(prompt); }
     if (duration !== undefined) { updates.push('duration = ?'); values.push(duration); }
     if (audio_enabled !== undefined) { updates.push('audio_enabled = ?'); values.push(audio_enabled ? 1 : 0); }
+    if (aspect_ratio !== undefined) { updates.push('aspect_ratio = ?'); values.push(aspect_ratio); }
     if (status !== undefined) { updates.push('status = ?'); values.push(status); }
 
     if (updates.length === 0) return res.status(400).json({ error: 'No fields to update' });
@@ -720,6 +723,7 @@ app.patch('/api/batch/tasks/:id', (req: any, res: any) => {
         db.prepare(`UPDATE batch_tasks SET ${updates.join(', ')} WHERE id = ?`).run(...values, req.params.id);
         const updated = db.prepare('SELECT * FROM batch_tasks WHERE id = ?').get(req.params.id) as any;
         updated.audio_enabled = !!updated.audio_enabled;
+        updated.aspect_ratio = updated.aspect_ratio || '16:9';
         io.emit('batch:update', updated);
         res.json(updated);
     } catch (err: any) {
@@ -766,6 +770,7 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
                 task.prompt || "Cinematic high quality video",
                 task.duration === 10 ? '10' : '5',
                 !!task.audio_enabled,
+                task.aspect_ratio || "16:9",
                 (status, videoUrl) => {
                     const updates: any = { status };
                     if (videoUrl) {
