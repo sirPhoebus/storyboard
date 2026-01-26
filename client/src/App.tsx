@@ -125,6 +125,18 @@ function App() {
     }
   }, [socket, currentChapterId, currentPageId]);
 
+  const handlePageSelection = useCallback((pageId: string) => {
+    // Find the page to discover its chapter
+    const page = allPages.find(p => p.id === pageId);
+    if (page) {
+      if (page.chapter_id !== currentChapterId) {
+        setCurrentChapterId(page.chapter_id);
+      }
+      setCurrentPageId(pageId);
+      setView('canvas');
+    }
+  }, [allPages, currentChapterId]);
+
   useEffect(() => {
     if (currentChapterId && allPages.length > 0) {
       // Find the first page of the selected chapter
@@ -135,27 +147,15 @@ function App() {
 
       // Only switch if we are NOT already on a page belonging to this chapter
       if (!isCurrentPageInChapter) {
-        setTimeout(() => {
-          if (firstPageInChapter) {
-            setCurrentPageId(firstPageInChapter.id);
-          } else {
-            setCurrentPageId(null);
-          }
-        }, 0);
+        if (firstPageInChapter) {
+          handlePageSelection(firstPageInChapter.id);
+        } else {
+          setCurrentPageId(null);
+        }
       }
     }
-  }, [currentChapterId, allPages, currentPageId]);
+  }, [currentChapterId, allPages, currentPageId, handlePageSelection]);
 
-  const handlePageSelection = (pageId: string) => {
-    // Find the page to discover its chapter
-    const page = allPages.find(p => p.id === pageId);
-    if (page) {
-      if (page.chapter_id !== currentChapterId) {
-        setCurrentChapterId(page.chapter_id);
-      }
-      setCurrentPageId(pageId);
-    }
-  };
 
   const handleAddChapter = () => {
     fetch(`${API_BASE_URL}/api/chapters`, {
@@ -220,6 +220,7 @@ function App() {
       .then(newPage => {
         setAllPages([...allPages, newPage]);
         setCurrentPageId(newPage.id);
+        setView('canvas');
       });
   };
 
@@ -267,7 +268,7 @@ function App() {
         onRenameChapter={handleRenameChapter}
         pages={pages}
         currentPageId={currentPageId}
-        onSelectPage={setCurrentPageId}
+        onSelectPage={handlePageSelection}
         onAddPage={handleAddPage}
         onRenamePage={handleRenamePage}
         isCollapsed={isSidebarCollapsed}
