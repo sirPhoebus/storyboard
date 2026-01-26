@@ -163,9 +163,9 @@ if (storyboardCount.count === 0) {
     }
   }
 
-  // Ensure every first chapter has a "Videos" page
-  const storyboards = db.prepare('SELECT id FROM storyboards').all() as { id: string }[];
-  for (const sb of storyboards) {
+  // Global Migration/Consistency: Ensure every storyboard has a "Videos" page in its first chapter
+  const allStoryboards = db.prepare('SELECT id FROM storyboards').all() as { id: string }[];
+  for (const sb of allStoryboards) {
     const firstChapter = db.prepare('SELECT id FROM chapters WHERE storyboard_id = ? ORDER BY order_index ASC LIMIT 1').get(sb.id) as { id: string } | undefined;
     if (firstChapter) {
       const hasVideosPage = db.prepare('SELECT id FROM pages WHERE chapter_id = ? AND type = "videos"').get(firstChapter.id);
@@ -182,6 +182,5 @@ if (storyboardCount.count === 0) {
       }
     }
   }
-}
 
-export default db;
+  export default db;
