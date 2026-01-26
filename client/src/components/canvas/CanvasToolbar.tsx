@@ -24,6 +24,8 @@ interface CanvasToolbarProps {
     onMoveSelectionToPage: (targetPageId: string) => void;
     onResetSize: (ids: string[]) => void;
     onSaveView: () => void;
+    ratingFilter: number;
+    onRatingFilterChange: (rating: number) => void;
 }
 
 export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
@@ -47,7 +49,9 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
     onMoveSelectionToPage,
 
     onResetSize,
-    onSaveView
+    onSaveView,
+    ratingFilter,
+    onRatingFilterChange
 }) => {
     const mainButtonStyle: CSSProperties = {
         padding: '8px 12px',
@@ -137,6 +141,32 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
                     ☁️
                 </button>
             )}
+
+            <div style={separatorStyle} />
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'rgba(0,0,0,0.3)', padding: '4px 8px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                <span style={{ fontSize: '12px', color: '#aaa', marginRight: '4px' }}>Filter:</span>
+                {[0, 1, 2, 3, 4, 5].map(stars => (
+                    <button
+                        key={stars}
+                        onClick={() => onRatingFilterChange(stars)}
+                        style={{
+                            background: 'none',
+                            border: 'none',
+                            color: stars === 0 ? (ratingFilter === 0 ? 'white' : '#666') : (stars <= ratingFilter ? '#FFD700' : '#444'),
+                            cursor: 'pointer',
+                            fontSize: stars === 0 ? '11px' : '18px',
+                            padding: '0 2px',
+                            fontWeight: ratingFilter === stars ? 'bold' : 'normal',
+                            transition: 'all 0.2s',
+                            opacity: (ratingFilter === 0 && stars === 0) || (ratingFilter > 0 && stars <= ratingFilter && stars > 0) ? 1 : 0.5
+                        }}
+                        title={stars === 0 ? "Clear Filter" : `Show ${stars}+ Stars`}
+                    >
+                        {stars === 0 ? 'ALL' : '★'}
+                    </button>
+                ))}
+            </div>
 
             <div style={separatorStyle} />
 

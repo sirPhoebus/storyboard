@@ -61,6 +61,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     const [snapToGrid, /* setSnapToGrid */] = useState(false);
     const [isMoveMenuOpen, setIsMoveMenuOpen] = useState(false);
     const [uploadsInProgress, setUploadsInProgress] = useState<UploadState[]>([]);
+    const [ratingFilter, setRatingFilter] = useState(0);
+    const [contextMenu, setContextMenu] = useState<{ x: number, y: number, elementId: string } | null>(null);
     const gridSize = 20;
 
     // Viewport Persistence Helpers
@@ -1196,8 +1198,28 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     };
 
 
+    const handleSendToBatch = (elementId: string, role: 'first' | 'last') => {
+        const el = elements.find(item => item.id === elementId);
+        if (!el || !el.url) return;
+
+        fetch(`${API_BASE_URL}/api/batch/add-frame`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: el.url, role })
+        })
+            .then(res => res.json())
+            .then(() => {
+                setContextMenu(null);
+                // Optionally show a toast/notification
+            })
+            .catch(err => console.error('Failed to add frame to batch:', err));
+    };
+
     return (
-        <div style={{ flex: 1, background: '#1a1a1a', position: 'relative', overflow: 'hidden' }}>
+        <div
+            style={{ flex: 1, background: '#1a1a1a', position: 'relative', overflow: 'hidden' }}
+            onClick={() => contextMenu && setContextMenu(null)}
+        >
             <CanvasToolbar
                 pageId={pageId}
                 selectedIds={selectedIds}
@@ -1219,7 +1241,41 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 onMoveSelectionToPage={handleMoveSelectionToPage}
                 onResetSize={handleResetSize}
                 onSaveView={handleSaveView}
+                onRatingFilterChange={setRatingFilter}
+                ratingFilter={ratingFilter}
             />
+
+            {contextMenu && (
+                <div style={{
+                    position: 'absolute',
+                    top: contextMenu.y,
+                    left: contextMenu.x,
+                    zIndex: 2000,
+                    background: '#2c3e50',
+                    border: '1px solid #34495e',
+                    borderRadius: '4px',
+                    padding: '4px 0',
+                    boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+                    minWidth: '160px'
+                }}>
+                    <div
+                        onClick={() => handleSendToBatch(contextMenu.elementId, 'first')}
+                        style={{ padding: '8px 16px', color: 'white', cursor: 'pointer', fontSize: '13px', hover: { background: '#34495e' } }}
+                        onMouseOver={(e) => (e.currentTarget.style.background = '#34495e')}
+                        onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
+                    >
+                        Send as first frame
+                    </div>
+                    <div
+                        onClick={() => handleSendToBatch(contextMenu.elementId, 'last')}
+                        style={{ padding: '8px 16px', color: 'white', cursor: 'pointer', fontSize: '13px' }}
+                        onMouseOver={(e) => (e.currentTarget.style.background = '#34495e')}
+                        onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
+                    >
+                        Send as last frame
+                    </div>
+                </div>
+            )}
             <input type="file" multiple ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} accept="image/*,video/*" />
 
             <UploadProgress uploads={uploadsInProgress} />
@@ -1286,7 +1342,11 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             >
                 <Layer>
                     {renderGrid()}
-                    {elements.map((el: Element) => {
+                    {elements.filter(el => {
+                        if (ratingFilter === 0) return true;
+                        if (el.type !== 'image' && el.type !== 'video') return true;
+                        return (el.rating || 0) >= ratingFilter;
+                    }).map((el: Element) => {
                         const isSelected = selectedIds.includes(el.id);
 
                         // Attach ref
@@ -1460,6 +1520,20 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                                     onTransformEnd={(e: Konva.KonvaEventObject<Event>) => handleTransformEnd(el.id, e.target)}
                                     isPlaying={el.isPlaying}
                                     isMuted={el.isMuted}
+                                    rating={el.rating}
+                                    onUpdateElement={handleUpdateStyle}
+                                    onContextMenu={(e: Konva.KonvaEventObject<PointerEvent>) => {
+                                        e.evt.preventDefault();
+                                        const stage = e.target.getStage();
+                                        if (!stage) return;
+                                        const pos = stage.getPointerPosition();
+                                        if (!pos) return;
+                                        setContextMenu({
+                                            x: pos.x,
+                                            y: pos.y,
+                                            elementId: el.id
+                                        });
+                                    }}
                                 />
                             );
                         }

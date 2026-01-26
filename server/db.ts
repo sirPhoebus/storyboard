@@ -22,7 +22,25 @@ db.exec(`
     thumbnail TEXT,
     FOREIGN KEY (storyboard_id) REFERENCES storyboards (id) ON DELETE CASCADE
   );
+
+  CREATE TABLE IF NOT EXISTS batch_tasks (
+    id TEXT PRIMARY KEY,
+    first_frame_url TEXT,
+    last_frame_url TEXT,
+    prompt TEXT,
+    duration INTEGER DEFAULT 5,
+    audio_enabled INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'pending',
+    generated_video_url TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
+
+try {
+  db.exec('ALTER TABLE batch_tasks ADD COLUMN generated_video_url TEXT');
+} catch (e) {
+  // Column already exists
+}
 
 try {
   db.exec('ALTER TABLE pages ADD COLUMN thumbnail TEXT');

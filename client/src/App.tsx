@@ -5,7 +5,8 @@ import { API_BASE_URL } from './config'
 import type { Chapter, Page } from './types'
 import { useSocket } from './hooks/useSocket'
 import HelpManual from './components/HelpManual'
-import { HelpCircle } from 'lucide-react'
+import BatchPage from './components/BatchPage'
+import { HelpCircle, Layers } from 'lucide-react'
 
 
 /* ... imports */
@@ -18,6 +19,7 @@ function App() {
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [connectedUsers, setConnectedUsers] = useState(1);
   const [isManualOpen, setIsManualOpen] = useState(false);
+  const [view, setView] = useState<'canvas' | 'batch'>('canvas');
   const socket = useSocket();
 
   const pages = allPages.filter(p => p.chapter_id === currentChapterId);
@@ -267,15 +269,23 @@ function App() {
         onWidthChange={setSidebarWidth}
         connectedUsers={connectedUsers}
       />
-      <Canvas
-        pageId={currentPageId}
-        isSidebarCollapsed={isSidebarCollapsed}
-        sidebarWidth={sidebarWidth}
-        chapters={chapters}
-        allPages={allPages}
-        onSelectPage={handlePageSelection}
-        socket={socket}
-      />
+
+      {view === 'canvas' ? (
+        <Canvas
+          pageId={currentPageId}
+          isSidebarCollapsed={isSidebarCollapsed}
+          sidebarWidth={sidebarWidth}
+          chapters={chapters}
+          allPages={allPages}
+          onSelectPage={handlePageSelection}
+          socket={socket}
+        />
+      ) : (
+        <BatchPage
+          onBack={() => setView('canvas')}
+          socket={socket}
+        />
+      )}
 
       {/* Floating Action Buttons */}
       <div style={{
@@ -313,6 +323,33 @@ function App() {
           Export
         </button>
         */}
+        {view === 'canvas' && (
+          <button
+            onClick={() => setView('batch')}
+            style={{
+              background: 'rgba(30,30,30,0.8)',
+              backdropFilter: 'blur(10px)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: '12px',
+              padding: '0 16px',
+              height: '42px',
+              color: 'white',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              fontSize: '14px',
+              fontWeight: 600,
+              transition: 'all 0.2s',
+              boxShadow: '0 4px 15px rgba(0,0,0,0.3)'
+            }}
+            className="hover-lift"
+          >
+            <Layers size={18} />
+            Batch Management
+          </button>
+        )}
+
         <button
           onClick={() => setIsManualOpen(true)}
           style={{

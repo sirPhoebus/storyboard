@@ -252,7 +252,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                             fontWeight: 700,
                             letterSpacing: '-0.02em',
                             color: 'white'
-                        }}>Storyboard</h1>
+                        }}>Black Board</h1>
                     </div>
                 )}
             </div>

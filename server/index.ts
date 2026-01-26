@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -7,6 +8,7 @@ import multer from 'multer';
 import path from 'path';
 import crypto from 'crypto';
 import archiver from 'archiver';
+import { KlingService } from './services/klingService';
 
 const dataDir = process.env.DATA_DIR || process.cwd();
 const uploadsDir = path.join(dataDir, 'uploads');
@@ -573,6 +575,153 @@ const broadcastUserCount = () => {
     io.emit('user_count', count);
 };
 
+app.get('/api/batch/tasks', (req: any, res: any) => {
+    try {
+        const tasks = db.prepare('SELECT * FROM batch_tasks ORDER BY created_at DESC').all();
+        res.json(tasks.map((t: any) => ({
+            ...t,
+            audio_enabled: !!t.audio_enabled
+        })));
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/batch/add-frame', (req: any, res: any) => {
+    const { url, role } = req.body; // role: 'first' | 'last'
+    if (!url || !role) return res.status(400).json({ error: 'url and role required' });
+
+    try {
+        const id = crypto.randomUUID();
+        // 1. Try to find an existing row where the OTHER frame is missing
+        const columnToCheck = role === 'first' ? 'last_frame_url' : 'first_frame_url';
+        const columnToFill = role === 'first' ? 'first_frame_url' : 'last_frame_url';
+
+        const existingRow = db.prepare(`
+            SELECT id FROM batch_tasks 
+            WHERE ${columnToFill} IS NULL 
+            AND ${columnToCheck} IS NOT NULL 
+            ORDER BY created_at ASC LIMIT 1
+        `).get() as { id: string } | undefined;
+
+        if (existingRow) {
+            db.prepare(`UPDATE batch_tasks SET ${columnToFill} = ? WHERE id = ?`).run(url, existingRow.id);
+            const updated = db.prepare('SELECT * FROM batch_tasks WHERE id = ?').get(existingRow.id) as any;
+            updated.audio_enabled = !!updated.audio_enabled;
+            io.emit('batch:update', updated);
+            res.json(updated);
+        } else {
+            // 2. Create a new row
+            db.prepare(`INSERT INTO batch_tasks (id, ${columnToFill}) VALUES (?, ?)`).run(id, url);
+            const newTask = {
+                id,
+                [columnToFill]: url,
+                [columnToCheck]: null,
+                prompt: '',
+                duration: 5,
+                audio_enabled: false,
+                status: 'pending',
+                created_at: new Date().toISOString()
+            };
+            io.emit('batch:add', newTask);
+            res.json(newTask);
+        }
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.patch('/api/batch/tasks/:id', (req: any, res: any) => {
+    const { prompt, duration, audio_enabled, status } = req.body;
+    const updates: string[] = [];
+    const values: any[] = [];
+
+    if (prompt !== undefined) { updates.push('prompt = ?'); values.push(prompt); }
+    if (duration !== undefined) { updates.push('duration = ?'); values.push(duration); }
+    if (audio_enabled !== undefined) { updates.push('audio_enabled = ?'); values.push(audio_enabled ? 1 : 0); }
+    if (status !== undefined) { updates.push('status = ?'); values.push(status); }
+
+    if (updates.length === 0) return res.status(400).json({ error: 'No fields to update' });
+
+    try {
+        db.prepare(`UPDATE batch_tasks SET ${updates.join(', ')} WHERE id = ?`).run(...values, req.params.id);
+        const updated = db.prepare('SELECT * FROM batch_tasks WHERE id = ?').get(req.params.id) as any;
+        updated.audio_enabled = !!updated.audio_enabled;
+        io.emit('batch:update', updated);
+        res.json(updated);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete('/api/batch/tasks/:id', (req: any, res: any) => {
+    try {
+        db.prepare('DELETE FROM batch_tasks WHERE id = ?').run(req.params.id);
+        io.emit('batch:delete', { id: req.params.id });
+        res.json({ success: true });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/batch/generate', async (req: any, res: any) => {
+    const allTasks = db.prepare("SELECT * FROM batch_tasks").all() as any[];
+    console.log(`🔍 [Batch] Total tasks in DB: ${allTasks.length}`);
+    allTasks.forEach(t => console.log(`   - Task ${t.id}: status=${t.status}, first=${t.first_frame_url}, last=${t.last_frame_url}`));
+
+    const tasks = db.prepare("SELECT * FROM batch_tasks WHERE status IN ('pending', 'failed') AND (first_frame_url IS NOT NULL OR last_frame_url IS NOT NULL)").all() as any[];
+    console.log(`🔍 [Batch] Pending tasks found: ${tasks.length}`);
+
+    if (tasks.length === 0) return res.status(400).json({ error: 'No pending tasks with at least one frame' });
+
+    const klingApiKey = process.env.KLING_API_KEY;
+    if (!klingApiKey) {
+        console.error('❌ KLING_API_KEY is not set in environment variables');
+        return res.status(500).json({ error: 'Server configuration error: KLING_API_KEY missing' });
+    }
+
+    res.json({ success: true, count: tasks.length });
+
+    // Background processing
+    for (const task of tasks) {
+        try {
+            console.log(`🚀 [Kling] Starting generation for task ${task.id}...`);
+
+            await KlingService.generateVideo(
+                { klingApiKey },
+                task.first_frame_url || task.last_frame_url, // Kling supports single frame or pair
+                task.prompt || "Cinematic high quality video",
+                task.duration === 10 ? '10' : '5',
+                !!task.audio_enabled,
+                (status, videoUrl) => {
+                    const updates: any = { status };
+                    if (videoUrl) updates.generated_video_url = videoUrl;
+
+                    const fields: string[] = [];
+                    const values: any[] = [];
+                    Object.entries(updates).forEach(([k, v]) => {
+                        fields.push(`${k} = ?`);
+                        values.push(v);
+                    });
+
+                    db.prepare(`UPDATE batch_tasks SET ${fields.join(', ')} WHERE id = ?`).run(...values, task.id);
+
+                    io.emit('batch:update', {
+                        ...task,
+                        ...updates,
+                        audio_enabled: !!task.audio_enabled
+                    });
+                }
+            );
+
+        } catch (err) {
+            console.error(`❌ [Kling] Error processing batch task ${task.id}:`, err);
+            db.prepare("UPDATE batch_tasks SET status = 'failed' WHERE id = ?").run(task.id);
+            io.emit('batch:update', { ...task, status: 'failed', audio_enabled: !!task.audio_enabled });
+        }
+    }
+});
+
 io.on('connection', (socket: any) => {
     console.log('✅ A user connected:', socket.id);
     broadcastUserCount();
@@ -685,7 +834,13 @@ io.on('connection', (socket: any) => {
 if (process.env.NODE_ENV === 'production') {
     const clientDistPath = path.join(process.cwd(), '..', 'client', 'dist');
     app.use(express.static(clientDistPath));
-    app.use((req, res) => {
+
+    app.get('*', (req: any, res: any) => {
+        // Don't serve index.html for missing assets or API calls
+        if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
+            console.log(`🚫 Asset/API not found: ${req.path}`);
+            return res.status(404).send('Not Found');
+        }
         res.sendFile(path.join(clientDistPath, 'index.html'));
     });
 }

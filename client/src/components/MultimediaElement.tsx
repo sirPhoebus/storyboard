@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, forwardRef } from 'react';
-import { Image as KonvaImage } from 'react-konva';
+import { Image as KonvaImage, Group, Rect, Text } from 'react-konva';
 import Konva from 'konva';
 import useImage from 'use-image';
 
@@ -18,12 +18,17 @@ interface MultimediaElementProps {
     onTransformEnd?: (e: Konva.KonvaEventObject<Event>) => void;
     isSelected?: boolean;
     onClick?: (e: Konva.KonvaEventObject<MouseEvent>) => void;
+    onContextMenu?: (e: Konva.KonvaEventObject<PointerEvent>) => void;
     // Video controls
     isPlaying?: boolean;
     isMuted?: boolean;
+    // Rating
+    rating?: number;
+    onUpdateElement?: (id: string, updates: Partial<MultimediaElementProps>) => void;
 }
 
-const MultimediaElement = forwardRef<Konva.Image, MultimediaElementProps>(({
+const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
+    id,
     type,
     url,
     x,
@@ -37,14 +42,18 @@ const MultimediaElement = forwardRef<Konva.Image, MultimediaElementProps>(({
     onTransformEnd,
     isSelected,
     onClick,
+    onContextMenu,
     isPlaying = true,
     isMuted = true,
+    rating = 0,
+    onUpdateElement,
 }, ref) => {
     // Only fetch image if type is image to save resources
     const [image] = useImage(type === 'image' ? url : '', 'anonymous');
     const videoRef = useRef<HTMLVideoElement | null>(null);
     const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
     const imageRef = useRef<Konva.Image>(null);
+    const [isHovered, setIsHovered] = useState(false);
 
     // Sync play/pause and mute/unmute
     useEffect(() => {
@@ -104,49 +113,85 @@ const MultimediaElement = forwardRef<Konva.Image, MultimediaElementProps>(({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [url, type]);
 
-    if (type === 'image') {
-        return (
-            <KonvaImage
-                ref={ref}
-                image={image}
-                x={x}
-                y={y}
-                width={width}
-                height={height}
-                stroke={isSelected ? '#3498db' : undefined}
-                strokeWidth={isSelected ? 4 : 0}
-                draggable={draggable}
-                onDragStart={onDragStart}
-                onDragMove={onDragMove}
-                onDragEnd={onDragEnd}
-                onTransformEnd={onTransformEnd}
-                onClick={onClick}
-            />
-        );
-    }
+    const handleRatingClick = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>, value: number) => {
+        e.cancelBubble = true;
+        if (onUpdateElement) {
+            onUpdateElement(id, { rating: value });
+        }
+    };
+
+    const renderStars = () => {
+        const stars = [];
+        const starCount = 5;
+        const starSpacing = 30;
+        const starSize = 26;
+
+        for (let i = 1; i <= starCount; i++) {
+            stars.push(
+                <Text
+                    key={i}
+                    text="★"
+                    fontSize={starSize}
+                    x={width - (starCount - i + 1) * starSpacing - 10}
+                    y={6}
+                    fill={i <= rating ? '#FFD700' : '#ffffff'}
+                    opacity={i <= rating ? 1 : 0.3}
+                    shadowBlur={i <= rating ? 10 : 0}
+                    shadowColor="#FFD700"
+                    onClick={(e) => handleRatingClick(e, i)}
+                    onTap={(e) => handleRatingClick(e, i)}
+                    onMouseEnter={(e) => {
+                        const stage = e.target.getStage();
+                        if (stage) stage.container().style.cursor = 'pointer';
+                    }}
+                    onMouseLeave={(e) => {
+                        const stage = e.target.getStage();
+                        if (stage) stage.container().style.cursor = 'default';
+                    }}
+                />
+            );
+        }
+        return stars;
+    };
 
     return (
-        <KonvaImage
-            ref={(node) => {
-                // Handle both the forwarded ref and internal ref
-                imageRef.current = node;
-                if (typeof ref === 'function') ref(node);
-                else if (ref) (ref as React.MutableRefObject<Konva.Image | null>).current = node;
-            }}
-            image={videoElement || undefined}
+        <Group
+            ref={ref}
             x={x}
             y={y}
-            width={width}
-            height={height}
-            stroke={isSelected ? '#3498db' : undefined}
-            strokeWidth={isSelected ? 4 : 0}
             draggable={draggable}
             onDragStart={onDragStart}
             onDragMove={onDragMove}
             onDragEnd={onDragEnd}
             onTransformEnd={onTransformEnd}
             onClick={onClick}
-        />
+            onContextMenu={onContextMenu}
+            onMouseEnter={() => setIsHovered(true)}
+            onMouseLeave={() => setIsHovered(false)}
+        >
+            <KonvaImage
+                ref={imageRef}
+                image={type === 'image' ? image : (videoElement || undefined)}
+                width={width}
+                height={height}
+                stroke={isSelected ? '#3498db' : undefined}
+                strokeWidth={isSelected ? 4 : 0}
+            />
+            {(isHovered || rating > 0) && (
+                <Group>
+                    <Rect
+                        x={width - 5 * 30 - 20}
+                        y={4}
+                        width={5 * 30 + 10}
+                        height={38}
+                        fill="rgba(0,0,0,0.6)"
+                        cornerRadius={6}
+                        listening={false}
+                    />
+                    {renderStars()}
+                </Group>
+            )}
+        </Group>
     );
 });
 
