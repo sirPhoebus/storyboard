@@ -15,7 +15,7 @@ client/package-lock.json
 *.sw?
 
 server/uploads
-
+.env
 server/node_modules
 server/dist
 server/dist-ssr
