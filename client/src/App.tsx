@@ -6,7 +6,7 @@ import type { Chapter, Page } from './types'
 import { useSocket } from './hooks/useSocket'
 import HelpManual from './components/HelpManual'
 import BatchPage from './components/BatchPage'
-import { HelpCircle, Layers } from 'lucide-react'
+import { HelpCircle } from 'lucide-react'
 
 
 /* ... imports */
@@ -287,6 +287,7 @@ function App() {
           chapters={chapters}
           allPages={allPages}
           onSelectPage={handlePageSelection}
+          onOpenBatchManagement={() => setView('batch')}
           socket={socket}
         />
       ) : (
@@ -307,57 +308,7 @@ function App() {
         zIndex: 100,
         transition: 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
       }}>
-        {/* 
-        <button
-          onClick={handleExport}
-          style={{
-            background: 'rgba(30,30,30,0.8)',
-            backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            borderRadius: '12px',
-            padding: '10px 16px',
-            color: 'white',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            fontSize: '14px',
-            fontWeight: 500,
-            transition: 'all 0.2s',
-            boxShadow: '0 4px 15px rgba(0,0,0,0.3)'
-          }}
-          className="hover-lift"
-        >
-          <Download size={18} />
-          Export
-        </button>
-        */}
-        {view === 'canvas' && (
-          <button
-            onClick={() => setView('batch')}
-            style={{
-              background: 'rgba(30,30,30,0.8)',
-              backdropFilter: 'blur(10px)',
-              border: '1px solid rgba(255,255,255,0.1)',
-              borderRadius: '12px',
-              padding: '0 16px',
-              height: '42px',
-              color: 'white',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              fontSize: '14px',
-              fontWeight: 600,
-              transition: 'all 0.2s',
-              boxShadow: '0 4px 15px rgba(0,0,0,0.3)'
-            }}
-            className="hover-lift"
-          >
-            <Layers size={18} />
-            Batch Management
-          </button>
-        )}
+        {/* Batch Management has been moved to contextual menu */}
 
         <button
           onClick={() => setIsManualOpen(true)}

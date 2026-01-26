@@ -16,12 +16,13 @@ interface CanvasProps {
     chapters: Chapter[];
     allPages: Page[];
     onSelectPage: (id: string) => void;
+    onOpenBatchManagement?: () => void;
     socket: Socket | null;
 }
 
 import type { UploadState } from './canvas/UploadProgress';
 
-const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidth, chapters, allPages, onSelectPage, socket }) => {
+const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidth, chapters, allPages, onSelectPage, onOpenBatchManagement, socket }) => {
 
 
     const [elements, setElements] = useState<Element[]>([]);
@@ -1306,6 +1307,18 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                         onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
                     >
                         Send as last frame
+                    </div>
+                    <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
+                    <div
+                        onClick={() => {
+                            setContextMenu(null);
+                            if (onOpenBatchManagement) onOpenBatchManagement();
+                        }}
+                        style={{ padding: '8px 16px', color: 'white', cursor: 'pointer', fontSize: '13px' }}
+                        onMouseOver={(e) => (e.currentTarget.style.background = '#34495e')}
+                        onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
+                    >
+                        Open Batch Management
                     </div>
                 </div>
             )}
