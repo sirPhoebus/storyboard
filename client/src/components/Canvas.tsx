@@ -1260,7 +1260,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 }}>
                     <div
                         onClick={() => handleSendToBatch(contextMenu.elementId, 'first')}
-                        style={{ padding: '8px 16px', color: 'white', cursor: 'pointer', fontSize: '13px', hover: { background: '#34495e' } }}
+                        style={{ padding: '8px 16px', color: 'white', cursor: 'pointer', fontSize: '13px' }}
                         onMouseOver={(e) => (e.currentTarget.style.background = '#34495e')}
                         onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
                     >
