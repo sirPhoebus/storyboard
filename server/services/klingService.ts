@@ -94,19 +94,32 @@ export class KlingService {
         console.log(`📡 [Kling] Creating task for prompt: "${prompt}"`);
         console.log(`📦 [Kling] Payload: ${JSON.stringify(payload, null, 2)}`);
 
-        const response = await fetch(`${this.API_BASE_URL}/generate`, {
-            method: 'POST',
-            headers: this.getHeaders(config),
-            body: JSON.stringify(payload)
-        });
+        const apiUrl = `${this.API_BASE_URL}/generate`;
+        console.log(`🌐 [Kling] API URL: ${apiUrl}`);
+
+        let response;
+        try {
+            response = await fetch(apiUrl, {
+                method: 'POST',
+                headers: this.getHeaders(config),
+                body: JSON.stringify(payload)
+            });
+        } catch (networkError: any) {
+            console.error(`❌ [Kling] Network/Fetch Error details:`, networkError);
+            if (networkError.cause) console.error('   Cause:', networkError.cause);
+            throw new Error(`Kling Network Error: ${networkError.message}`);
+        }
 
         if (!response.ok) {
             const errorText = await response.text();
+            console.error(`❌ [Kling] API Error Status: ${response.status} ${response.statusText}`);
+            console.error(`❌ [Kling] API Error Body: ${errorText}`);
             throw new Error(`Kling API Error ${response.status}: ${errorText}`);
         }
 
         const data = await response.json() as any;
         if (data.code !== 200 || !data.data?.task_id) {
+            console.error(`❌ [Kling] Logical Error Response:`, data);
             throw new Error(data.message || 'Unknown API Error: Missing task_id');
         }
 
