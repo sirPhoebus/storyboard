@@ -644,11 +644,9 @@ app.post('/api/videos/sync', async (req: any, res: any) => {
                     const filePath = path.join(generatedDir, file);
                     const dimensions = await getVideoDimensions(filePath);
                     if (dimensions.width && dimensions.height) {
-                        // Scale to a reasonable size while maintaining aspect ratio
-                        const maxWidth = 533;
-                        const factor = maxWidth / dimensions.width;
-                        width = Math.round(dimensions.width * factor);
-                        height = Math.round(dimensions.height * factor);
+                        // Use original dimensions without scaling
+                        width = dimensions.width;
+                        height = dimensions.height;
                     } else {
                         throw new Error(`Could not determine dimensions for ${file}`);
                     }
@@ -815,10 +813,9 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
                                     const filePath = path.join(dataDir, videoUrl);
                                     const dimensions = await getVideoDimensions(filePath);
                                     if (dimensions.width && dimensions.height) {
-                                        const maxWidth = 533;
-                                        const factor = maxWidth / dimensions.width;
-                                        width = Math.round(dimensions.width * factor);
-                                        height = Math.round(dimensions.height * factor);
+                                        // Use original dimensions without scaling
+                                        width = dimensions.width;
+                                        height = dimensions.height;
                                     } else {
                                         throw new Error('Could not determine dimensions for generated video');
                                     }
