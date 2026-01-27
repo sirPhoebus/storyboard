@@ -160,7 +160,6 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
                 if (typeof ref === 'function') ref(node);
                 else if (ref) ref.current = node;
                 if (node) {
-                    // @ts-expect-error - store inner ref for reset logic
                     (node as Konva.Group & { _innerImage?: Konva.Image })._innerImage = imageRef.current || undefined;
                 }
             }}
