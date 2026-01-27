@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { pipeline } from 'stream/promises';
+import sharp from 'sharp';
 
 export interface KlingConfig {
     klingApiKey: string;
@@ -42,6 +43,65 @@ export class KlingService {
         await pipeline(response.body, fileStream);
 
         return `/uploads/generated/${fileName}`;
+    }
+
+    // Helper to normalize image (resize to 1280x1280, remove alpha, convert to jpeg)
+    // This is critical for Kling compatibility
+    private static async normalizeImage(imageUrl: string): Promise<string> {
+        const dataDir = process.env.DATA_DIR || process.cwd();
+        const uploadsDir = path.join(dataDir, 'uploads');
+        const normalizedDir = path.join(uploadsDir, 'normalized');
+
+        if (!fs.existsSync(normalizedDir)) {
+            fs.mkdirSync(normalizedDir, { recursive: true });
+        }
+
+        // 1. Determine local path
+        let localPath = "";
+        try {
+            const urlObj = new URL(imageUrl);
+            const fileName = path.basename(urlObj.pathname);
+
+            // Handle both standard uploads and previously generated videos (if used as frames)
+            if (urlObj.pathname.includes('/generated/')) {
+                localPath = path.join(uploadsDir, 'generated', fileName);
+            } else {
+                localPath = path.join(uploadsDir, fileName);
+            }
+        } catch (e) {
+            // Fallback for non-URL paths or relative paths
+            const fileName = path.basename(imageUrl);
+            if (imageUrl.includes('/generated/')) {
+                localPath = path.join(uploadsDir, 'generated', fileName);
+            } else {
+                localPath = path.join(uploadsDir, fileName);
+            }
+        }
+
+        if (!fs.existsSync(localPath)) {
+            console.error(`❌ [Kling] Image not found for normalization: ${localPath}`);
+            // If file is missing locally, we return the original URL and hope for the best
+            // (But this likely means it will fail if the container lost the file)
+            return imageUrl;
+        }
+
+        const normalizedFileName = `${crypto.randomUUID()}.jpg`;
+        const normalizedPath = path.join(normalizedDir, normalizedFileName);
+
+        console.log(`🖼️ [Kling] Normalizing image: ${path.basename(localPath)} -> ${normalizedFileName} (Standardizing to 1280px)`);
+
+        // Convert to high-quality JPEG and standardize resolution (max 1280px width)
+        await sharp(localPath)
+            .resize(1280, 1280, { fit: 'inside', withoutEnlargement: true })
+            .flatten({ background: { r: 255, g: 255, b: 255 } })
+            .jpeg({ quality: 90 })
+            .toFile(normalizedPath);
+
+        const baseUrl = process.env.STORYBOARD_BASE_URL;
+        if (!baseUrl) return imageUrl; // Should have been caught earlier but safe guard
+
+        const cleanBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+        return `${cleanBase}/uploads/normalized/${normalizedFileName}`;
     }
 
     static async createVideoTask(
@@ -86,6 +146,13 @@ export class KlingService {
             } else {
                 const cleanPath = frameUrl.startsWith('/') ? frameUrl : `/${frameUrl}`;
                 finalImageUrl = `${baseUrl}${cleanPath}`;
+            }
+
+            // Normalize: standard resolution, clean format, short URL
+            try {
+                finalImageUrl = await this.normalizeImage(finalImageUrl);
+            } catch (normErr) {
+                console.error('⚠️ [Kling] Normalization failed:', normErr);
             }
 
             payload.image_urls = [finalImageUrl];
