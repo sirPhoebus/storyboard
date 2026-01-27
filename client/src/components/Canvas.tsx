@@ -1176,8 +1176,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             if (!node) return;
 
             // If it's a MultimediaElement, it's a Group with an _innerImage
-            if (node instanceof Konva.Group && (node as any)._innerImage) {
-                node = (node as any)._innerImage;
+            if (node instanceof Konva.Group && (node as Konva.Group & { _innerImage?: Konva.Image })._innerImage) {
+                node = (node as Konva.Group & { _innerImage: Konva.Image })._innerImage;
             }
 
             if (!(node instanceof Konva.Image)) return;

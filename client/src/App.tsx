@@ -148,9 +148,9 @@ function App() {
       // Only switch if we are NOT already on a page belonging to this chapter
       if (!isCurrentPageInChapter) {
         if (firstPageInChapter) {
-          handlePageSelection(firstPageInChapter.id);
+          setTimeout(() => handlePageSelection(firstPageInChapter.id), 0);
         } else {
-          setCurrentPageId(null);
+          setTimeout(() => setCurrentPageId(null), 0);
         }
       }
     }

@@ -18,11 +18,11 @@ interface PromptCategory {
 }
 
 interface BatchPageProps {
-    onBack: () => void;
     socket: Socket | null;
+    onBack?: () => void;
 }
 
-const BatchPage: React.FC<BatchPageProps> = ({ onBack, socket }) => {
+const BatchPage: React.FC<BatchPageProps> = ({ socket, onBack }) => {
     const [tasks, setTasks] = useState<BatchTask[]>([]);
     const [loading, setLoading] = useState(true);
     const [prompts, setPrompts] = useState<PromptCategory[]>([]);
@@ -99,6 +99,29 @@ const BatchPage: React.FC<BatchPageProps> = ({ onBack, socket }) => {
             <div style={{ flex: 1, overflowY: 'auto', padding: '40px', color: '#e0e0e0' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                        {onBack && (
+                            <button
+                                onClick={onBack}
+                                style={{
+                                    background: 'rgba(255,255,255,0.05)',
+                                    border: '1px solid rgba(255,255,255,0.1)',
+                                    borderRadius: '12px',
+                                    padding: '8px',
+                                    color: 'white',
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    transition: 'all 0.2s'
+                                }}
+                                onMouseOver={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
+                                onMouseOut={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
+                                title="Back to Canvas"
+                            >
+                                <ChevronLeft size={24} />
+                            </button>
+                        )}
+                        <h1 style={{ margin: 0, fontSize: '28px', fontWeight: 800, letterSpacing: '-0.5px' }}>Batch Management</h1>
                     </div>
                     <div style={{ display: 'flex', gap: '12px' }}>
                         <button
@@ -230,7 +253,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ onBack, socket }) => {
                                         {['16:9', '9:16', '1:1', '21:9'].map(ar => (
                                             <button
                                                 key={ar}
-                                                onClick={() => handleUpdateTask(task.id, { aspect_ratio: ar as any })}
+                                                onClick={() => handleUpdateTask(task.id, { aspect_ratio: ar as BatchTask['aspect_ratio'] })}
                                                 style={{
                                                     padding: '6px 12px',
                                                     borderRadius: '8px',
