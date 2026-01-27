@@ -837,11 +837,38 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
                 }
             );
 
+
         } catch (err) {
             console.error(`❌ [Kling] Error processing batch task ${task.id}:`, err);
             db.prepare("UPDATE batch_tasks SET status = 'failed' WHERE id = ?").run(task.id);
             io.emit('batch:update', { ...task, status: 'failed', audio_enabled: !!task.audio_enabled });
         }
+    }
+});
+
+app.get('/api/prompts', (req: any, res: any) => {
+    try {
+        const promptsPath = path.join(__dirname, 'services', 'prompts.md');
+        const fileContent = fs.readFileSync(promptsPath, 'utf8');
+        const categories: any[] = [];
+        const categoryRegex = /\{[^}]*id:\s*'([^']+)'[^}]*title:\s*'([^']+)'[^}]*moves:\s*\[([^\]]+)\]/g;
+        let categoryMatch;
+        while ((categoryMatch = categoryRegex.exec(fileContent)) !== null) {
+            const moves: any[] = [];
+            const movesText = categoryMatch[3];
+            if (movesText) {
+                const moveRegex = /\{\s*id:\s*'([^']+)',\s*title:\s*'([^']+)',\s*description:\s*'([^']+)',\s*prompt:\s*'([^']+)'\s*\}/g;
+                let moveMatch;
+                while ((moveMatch = moveRegex.exec(movesText)) !== null) {
+                    moves.push({ id: moveMatch[1], title: moveMatch[2], description: moveMatch[3], prompt: moveMatch[4] });
+                }
+            }
+            categories.push({ id: categoryMatch[1], title: categoryMatch[2], moves });
+        }
+        res.json(categories);
+    } catch (err: any) {
+        console.error('Error reading prompts:', err);
+        res.status(500).json({ error: err.message });
     }
 });
 
