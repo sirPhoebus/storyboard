@@ -138,7 +138,7 @@ export class KlingService {
         duration: '5' | '10',
         sound: boolean,
         aspectRatio: string,
-        onStatusUpdate?: (status: string, videoUrl?: string) => void
+        onStatusUpdate?: (status: string, videoUrl?: string) => void | Promise<void>
     ): Promise<string> {
 
         try {
@@ -153,7 +153,7 @@ export class KlingService {
             );
 
             console.log(`✓ [Kling] Task submitted: ${taskId}`);
-            if (onStatusUpdate) onStatusUpdate('generating');
+            if (onStatusUpdate) await onStatusUpdate('generating');
 
             // 2. Poll for Status
             let attempts = 0;
@@ -172,7 +172,7 @@ export class KlingService {
                     console.log(`✓ [Kling] Task completed! Downloading video...`);
                     const localVideoUrl = await this.downloadVideo(remoteVideoUrl);
 
-                    if (onStatusUpdate) onStatusUpdate('completed', localVideoUrl);
+                    if (onStatusUpdate) await onStatusUpdate('completed', localVideoUrl);
                     return localVideoUrl;
 
                 } else if (taskData.status === 'FAILED') {
@@ -183,7 +183,7 @@ export class KlingService {
 
             throw new Error("Kling generation timed out");
         } catch (err) {
-            if (onStatusUpdate) onStatusUpdate('failed');
+            if (onStatusUpdate) await onStatusUpdate('failed');
             throw err;
         }
     }

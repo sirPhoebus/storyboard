@@ -19,10 +19,9 @@ interface PromptCategory {
 
 interface BatchPageProps {
     socket: Socket | null;
-    onBack?: () => void;
 }
 
-const BatchPage: React.FC<BatchPageProps> = ({ socket, onBack }) => {
+const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
     const [tasks, setTasks] = useState<BatchTask[]>([]);
     const [loading, setLoading] = useState(true);
     const [prompts, setPrompts] = useState<PromptCategory[]>([]);
@@ -91,9 +90,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket, onBack }) => {
 
     const handleGenerateAll = () => {
         fetch(`${API_BASE_URL}/api/batch/generate`, { method: 'POST' })
-            .then(res => res.json())
-            .then(data => alert(`Started generation for ${data.count} tasks!`))
-            .catch(err => alert('Failed to start generation: ' + err.message));
+            .catch(err => console.error('Failed to start generation:', err));
     };
 
     const handleSelectPrompt = (prompt: string) => {
@@ -105,32 +102,10 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket, onBack }) => {
     if (loading) return <div style={{ color: 'white', padding: '40px' }}>Loading tasks...</div>;
 
     return (
-        <div style={{ display: 'flex', height: '100vh', background: '#0f0f0f' }}>
+        <div style={{ display: 'flex', flex: 1, height: '100vh', background: '#0f0f0f' }}>
             <div style={{ flex: 1, overflowY: 'auto', padding: '40px', color: '#e0e0e0' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                        {onBack && (
-                            <button
-                                onClick={onBack}
-                                style={{
-                                    background: 'rgba(255,255,255,0.05)',
-                                    border: '1px solid rgba(255,255,255,0.1)',
-                                    borderRadius: '12px',
-                                    padding: '8px',
-                                    color: 'white',
-                                    cursor: 'pointer',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    transition: 'all 0.2s'
-                                }}
-                                onMouseOver={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
-                                onMouseOut={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.05)')}
-                                title="Back to Canvas"
-                            >
-                                <ChevronLeft size={24} />
-                            </button>
-                        )}
                         <h1 style={{ margin: 0, fontSize: '28px', fontWeight: 800, letterSpacing: '-0.5px' }}>Batch Management</h1>
                     </div>
                     <div style={{ display: 'flex', gap: '12px' }}>

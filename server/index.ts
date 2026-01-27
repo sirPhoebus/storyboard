@@ -9,6 +9,7 @@ import path from 'path';
 import crypto from 'crypto';
 import archiver from 'archiver';
 import { KlingService } from './services/klingService';
+import getVideoDimensions from 'get-video-dimensions';
 
 const dataDir = process.env.DATA_DIR || process.cwd();
 const uploadsDir = path.join(dataDir, 'uploads');
@@ -618,7 +619,7 @@ const getDimensionsFromAspectRatio = (aspectRatio?: string) => {
     }
 };
 
-app.post('/api/videos/sync', (req: any, res: any) => {
+app.post('/api/videos/sync', async (req: any, res: any) => {
     const dataDir = process.env.DATA_DIR || process.cwd();
     const generatedDir = path.join(dataDir, 'uploads', 'generated');
     const storyboardId = 'default-storyboard';
@@ -646,17 +647,35 @@ app.post('/api/videos/sync', (req: any, res: any) => {
                 const elementId = crypto.randomUUID();
                 const x = 50 + (currentCount % 3) * 450;
                 const y = 50 + Math.floor(currentCount / 3) * 350;
-                const content = { url, width: 400, height: 300 };
+
+                let width = 400;
+                let height = 300;
+
+                try {
+                    const filePath = path.join(generatedDir, file);
+                    const dimensions = await getVideoDimensions(filePath);
+                    if (dimensions.width && dimensions.height) {
+                        // Scale to a reasonable size while maintaining aspect ratio
+                        const maxWidth = 400;
+                        const factor = maxWidth / dimensions.width;
+                        width = Math.round(dimensions.width * factor);
+                        height = Math.round(dimensions.height * factor);
+                    }
+                } catch (dimErr) {
+                    console.error(`Failed to get dimensions for ${file}:`, dimErr);
+                }
+
+                const content = { url, width, height };
 
                 db.prepare('INSERT INTO elements (id, page_id, type, x, y, width, height, content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
-                    elementId, videosPage.id, 'video', x, y, 400, 300, JSON.stringify(content)
+                    elementId, videosPage.id, 'video', x, y, width, height, JSON.stringify(content)
                 );
 
                 io.emit('element:add', {
                     id: elementId,
                     pageId: videosPage.id,
                     type: 'video',
-                    x, y, width: 400, height: 300,
+                    x, y, width, height,
                     content
                 });
 
@@ -781,7 +800,7 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
                 task.duration === 10 ? '10' : '5',
                 !!task.audio_enabled,
                 task.aspect_ratio || "16:9",
-                (status, videoUrl) => {
+                async (status, videoUrl) => {
                     const updates: any = { status };
                     if (videoUrl) {
                         updates.generated_video_url = videoUrl;
@@ -796,24 +815,41 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
                                 const x = 50 + (count % 3) * 450;
                                 const y = 50 + Math.floor(count / 3) * 350;
 
+                                let width = 400;
+                                let height = 300;
+
+                                try {
+                                    // videoUrl is /uploads/generated/uuid.mp4
+                                    const filePath = path.join(dataDir, videoUrl);
+                                    const dimensions = await getVideoDimensions(filePath);
+                                    if (dimensions.width && dimensions.height) {
+                                        const maxWidth = 400;
+                                        const factor = maxWidth / dimensions.width;
+                                        width = Math.round(dimensions.width * factor);
+                                        height = Math.round(dimensions.height * factor);
+                                    }
+                                } catch (dimErr) {
+                                    console.error('Failed to get dimensions for generated video:', dimErr);
+                                }
+
                                 const content = {
                                     url: videoUrl,
-                                    width: 400,
-                                    height: 300
+                                    width,
+                                    height
                                 };
 
                                 db.prepare('INSERT INTO elements (id, page_id, type, x, y, width, height, content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
-                                    elementId, videosPage.id, 'video', x, y, 400, 300, JSON.stringify(content)
+                                    elementId, videosPage.id, 'video', x, y, width, height, JSON.stringify(content)
                                 );
 
                                 io.emit('element:add', {
                                     id: elementId,
                                     pageId: videosPage.id,
                                     type: 'video',
-                                    x, y, width: 400, height: 300,
+                                    x, y, width, height,
                                     content
                                 });
-                                console.log(`🎬 [DB] Auto-added video ${videoUrl} to page ${videosPage.id}`);
+                                console.log(`🎬 [DB] Auto-added video ${videoUrl} to page ${videosPage.id} at ${width}x${height}`);
                             }
                         } catch (err) {
                             console.error('❌ Failed to auto-add video to canvas:', err);

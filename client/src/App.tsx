@@ -292,7 +292,6 @@ function App() {
         />
       ) : (
         <BatchPage
-          onBack={() => setView('canvas')}
           socket={socket}
         />
       )}
