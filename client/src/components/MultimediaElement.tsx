@@ -8,8 +8,8 @@ interface MultimediaElementProps {
     type: 'image' | 'video';
     x: number;
     y: number;
-    width?: number;
-    height?: number;
+    width: number;
+    height: number;
     url: string;
     draggable?: boolean;
     onDragStart?: (e: Konva.KonvaEventObject<DragEvent>) => void;
@@ -33,8 +33,8 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
     url,
     x,
     y,
-    width = 200,
-    height = 150,
+    width,
+    height,
     draggable,
     onDragStart,
     onDragMove,

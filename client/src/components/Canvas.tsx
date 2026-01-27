@@ -131,10 +131,14 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             .then(res => res.json())
             .then((data: unknown) => {
                 if (Array.isArray(data)) {
-                    setElements((data as RawElement[]).map(el => ({
-                        ...el,
-                        ...(typeof el.content === 'string' ? JSON.parse(el.content) : el.content)
-                    })));
+                    setElements((data as RawElement[]).map(el => {
+                        const content = typeof el.content === 'string' ? JSON.parse(el.content) : el.content;
+                        return {
+                            ...content, // stale data from JSON
+                            ...el,      // fresh data from table columns (id, type, x, y, width, height, etc.)
+                            content: content // Keep parsed content for reference
+                        };
+                    }));
                 } else {
                     console.error('API Error: Expected array for elements, got:', data);
                     setElements([]);
@@ -823,33 +827,49 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 );
 
                 const elementType = type.startsWith('video') ? 'video' : 'image';
-                let finalWidth = 400;
-                let finalHeight = 300;
+                let finalWidth: number | undefined;
+                let finalHeight: number | undefined;
 
                 if (elementType === 'image') {
                     const img = new Image();
                     img.src = url;
-                    await new Promise((resolve) => {
+                    await new Promise((resolve, reject) => {
                         img.onload = () => {
                             const ratio = img.width / img.height;
-                            if (ratio > 1) { finalWidth = 400; finalHeight = 400 / ratio; }
-                            else { finalHeight = 400; finalWidth = 400 * ratio; }
+                            const maxWidth = 533; // Standardize on a reasonable base
+                            if (ratio > 1) {
+                                finalWidth = maxWidth;
+                                finalHeight = Math.round(maxWidth / ratio);
+                            } else {
+                                finalHeight = maxWidth;
+                                finalWidth = Math.round(maxWidth * ratio);
+                            }
                             resolve(null);
                         };
-                        img.onerror = () => resolve(null);
+                        img.onerror = () => reject(new Error('Failed to load image metadata'));
                     });
                 } else if (elementType === 'video') {
                     const video = document.createElement('video');
                     video.src = url;
-                    await new Promise((resolve) => {
+                    await new Promise((resolve, reject) => {
                         video.onloadedmetadata = () => {
                             const ratio = video.videoWidth / video.videoHeight;
-                            if (ratio > 1) { finalWidth = 400; finalHeight = 400 / ratio; }
-                            else { finalHeight = 400; finalWidth = 400 * ratio; }
+                            const maxWidth = 533;
+                            if (ratio > 1) {
+                                finalWidth = maxWidth;
+                                finalHeight = Math.round(maxWidth / ratio);
+                            } else {
+                                finalHeight = maxWidth;
+                                finalWidth = Math.round(maxWidth * ratio);
+                            }
                             resolve(null);
                         };
-                        video.onerror = () => resolve(null);
+                        video.onerror = () => reject(new Error('Failed to load video metadata'));
                     });
+                }
+
+                if (!finalWidth || !finalHeight) {
+                    throw new Error('Could not determine asset dimensions');
                 }
 
                 setUploadsInProgress(prev =>

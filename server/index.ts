@@ -609,15 +609,6 @@ app.get('/api/batch/tasks', (req: any, res: any) => {
     }
 });
 
-const getDimensionsFromAspectRatio = (aspectRatio?: string) => {
-    switch (aspectRatio) {
-        case '21:9': return { width: 700, height: 300 };
-        case '9:16': return { width: 300, height: 533 };
-        case '1:1': return { width: 400, height: 400 };
-        case '16:9':
-        default: return { width: 533, height: 300 };
-    }
-};
 
 app.post('/api/videos/sync', async (req: any, res: any) => {
     const dataDir = process.env.DATA_DIR || process.cwd();
@@ -648,21 +639,24 @@ app.post('/api/videos/sync', async (req: any, res: any) => {
                 const x = 50 + (currentCount % 3) * 450;
                 const y = 50 + Math.floor(currentCount / 3) * 350;
 
-                let width = 400;
-                let height = 300;
+                let width: number;
+                let height: number;
 
                 try {
                     const filePath = path.join(generatedDir, file);
                     const dimensions = await getVideoDimensions(filePath);
                     if (dimensions.width && dimensions.height) {
                         // Scale to a reasonable size while maintaining aspect ratio
-                        const maxWidth = 400;
+                        const maxWidth = 533;
                         const factor = maxWidth / dimensions.width;
                         width = Math.round(dimensions.width * factor);
                         height = Math.round(dimensions.height * factor);
+                    } else {
+                        throw new Error(`Could not determine dimensions for ${file}`);
                     }
                 } catch (dimErr) {
                     console.error(`Failed to get dimensions for ${file}:`, dimErr);
+                    continue; // Skip this file if we can't get dimensions
                 }
 
                 const content = { url, width, height };
@@ -815,21 +809,24 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
                                 const x = 50 + (count % 3) * 450;
                                 const y = 50 + Math.floor(count / 3) * 350;
 
-                                let width = 400;
-                                let height = 300;
+                                let width: number;
+                                let height: number;
 
                                 try {
                                     // videoUrl is /uploads/generated/uuid.mp4
                                     const filePath = path.join(dataDir, videoUrl);
                                     const dimensions = await getVideoDimensions(filePath);
                                     if (dimensions.width && dimensions.height) {
-                                        const maxWidth = 400;
+                                        const maxWidth = 533;
                                         const factor = maxWidth / dimensions.width;
                                         width = Math.round(dimensions.width * factor);
                                         height = Math.round(dimensions.height * factor);
+                                    } else {
+                                        throw new Error('Could not determine dimensions for generated video');
                                     }
                                 } catch (dimErr) {
                                     console.error('Failed to get dimensions for generated video:', dimErr);
+                                    return; // Don't add if we can't get dimensions
                                 }
 
                                 const content = {
