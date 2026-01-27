@@ -44,8 +44,18 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket, onBack }) => {
 
         fetch(`${API_BASE_URL}/api/prompts`)
             .then(res => res.json())
-            .then(data => setPrompts(data))
-            .catch(err => console.error('Failed to fetch prompts:', err));
+            .then(data => {
+                if (Array.isArray(data)) {
+                    setPrompts(data);
+                } else {
+                    console.error('API Error: Expected array for prompts, got:', data);
+                    setPrompts([]);
+                }
+            })
+            .catch(err => {
+                console.error('Failed to fetch prompts:', err);
+                setPrompts([]);
+            });
     }, []);
 
     useEffect(() => {

@@ -848,7 +848,7 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
 
 app.get('/api/prompts', (req: any, res: any) => {
     try {
-        const promptsPath = path.join(__dirname, 'services', 'prompts.md');
+        const promptsPath = path.join(process.cwd(), 'services', 'prompts.md');
         const fileContent = fs.readFileSync(promptsPath, 'utf8');
         const categories: any[] = [];
         const categoryRegex = /\{[^}]*id:\s*'([^']+)'[^}]*title:\s*'([^']+)'[^}]*moves:\s*\[([^\]]+)\]/g;

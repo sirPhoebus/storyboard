@@ -21,6 +21,9 @@ interface CanvasProps {
 }
 
 import type { UploadState } from './canvas/UploadProgress';
+interface RawElement extends Partial<Element> {
+    content: string | Record<string, unknown>;
+}
 
 const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidth, chapters, allPages, onSelectPage, onOpenBatchManagement, socket }) => {
 
@@ -126,13 +129,22 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         fetch(`${API_BASE_URL}/api/elements/${pageId}`)
 
             .then(res => res.json())
-            .then((data: (Element & { content: Record<string, unknown> })[]) => {
-                setElements(data.map(el => ({
-                    ...el,
-                    ...el.content
-                })));
+            .then((data: unknown) => {
+                if (Array.isArray(data)) {
+                    setElements((data as RawElement[]).map(el => ({
+                        ...el,
+                        ...(typeof el.content === 'string' ? JSON.parse(el.content) : el.content)
+                    })));
+                } else {
+                    console.error('API Error: Expected array for elements, got:', data);
+                    setElements([]);
+                }
                 setHistory([]);
                 setRedoStack([]);
+            })
+            .catch(err => {
+                console.error('Failed to fetch elements:', err);
+                setElements([]);
             });
     }, [pageId, loadViewport]);
 
