@@ -824,27 +824,32 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
                                     }
                                 } catch (dimErr) {
                                     console.error('Failed to get dimensions for generated video:', dimErr);
-                                    return; // Don't add if we can't get dimensions
+                                    // If we strictly require dimensions, we should fail the task here
+                                    // rather than returning and leaving it in 'generating' status.
+                                    updates.status = 'failed';
+                                    updates.error = 'Failed to determine video dimensions';
                                 }
 
-                                const content = {
-                                    url: videoUrl,
-                                    width,
-                                    height
-                                };
+                                if (updates.status !== 'failed') {
+                                    const content = {
+                                        url: videoUrl,
+                                        width: width!,
+                                        height: height!
+                                    };
 
-                                db.prepare('INSERT INTO elements (id, page_id, type, x, y, width, height, content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
-                                    elementId, videosPage.id, 'video', x, y, width, height, JSON.stringify(content)
-                                );
+                                    db.prepare('INSERT INTO elements (id, page_id, type, x, y, width, height, content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
+                                        elementId, videosPage.id, 'video', x, y, width!, height!, JSON.stringify(content)
+                                    );
 
-                                io.emit('element:add', {
-                                    id: elementId,
-                                    pageId: videosPage.id,
-                                    type: 'video',
-                                    x, y, width, height,
-                                    content
-                                });
-                                console.log(`🎬 [DB] Auto-added video ${videoUrl} to page ${videosPage.id} at ${width}x${height}`);
+                                    io.emit('element:add', {
+                                        id: elementId,
+                                        pageId: videosPage.id,
+                                        type: 'video',
+                                        x, y, width: width!, height: height!,
+                                        content
+                                    });
+                                    console.log(`🎬 [DB] Auto-added video ${videoUrl} to page ${videosPage.id} at ${width!}x${height!}`);
+                                }
                             }
                         } catch (err) {
                             console.error('❌ Failed to auto-add video to canvas:', err);
