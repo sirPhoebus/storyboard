@@ -480,9 +480,7 @@ app.post('/api/upload', upload.single('file'), (req: any, res: any) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
     }
-    const host = req.get('host');
-    const protocol = req.protocol;
-    const url = `${protocol}://${host}/uploads/${req.file.filename}`;
+    const url = `/uploads/${req.file.filename}`;
     res.json({ url, type: req.file.mimetype });
 });
 
