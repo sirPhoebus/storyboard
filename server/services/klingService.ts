@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { pipeline } from 'stream/promises';
+import sharp from 'sharp';
 
 export interface KlingConfig {
     klingApiKey: string;
@@ -44,6 +45,55 @@ export class KlingService {
         return `/uploads/generated/${fileName}`;
     }
 
+    // New helper to normalize images (convert PNG with alpha to JPEG, resize if too large)
+    private static async normalizeImage(imageUrl: string): Promise<string> {
+        const dataDir = process.env.DATA_DIR || process.cwd();
+        const uploadsDir = path.join(dataDir, 'uploads');
+        const normalizedDir = path.join(uploadsDir, 'normalized');
+
+        if (!fs.existsSync(normalizedDir)) {
+            fs.mkdirSync(normalizedDir, { recursive: true });
+        }
+
+        // 1. Get local path 
+        let localPath = "";
+        try {
+            const urlObj = new URL(imageUrl);
+            const fileName = path.basename(urlObj.pathname);
+            localPath = path.join(uploadsDir, fileName);
+
+            // Handle subfolders like /uploads/generated/
+            if (urlObj.pathname.includes('/generated/')) {
+                localPath = path.join(uploadsDir, 'generated', fileName);
+            }
+        } catch (e) {
+            // If relative URL
+            const fileName = path.basename(imageUrl);
+            localPath = path.join(uploadsDir, fileName);
+            if (imageUrl.includes('/generated/')) {
+                localPath = path.join(uploadsDir, 'generated', fileName);
+            }
+        }
+
+        if (!fs.existsSync(localPath)) {
+            console.error(`❌ [Kling] Local image not found for normalization: ${localPath}`);
+            return imageUrl; // Fallback to original
+        }
+
+        const normalizedFileName = `${crypto.randomUUID()}.jpg`;
+        const normalizedPath = path.join(normalizedDir, normalizedFileName);
+
+        console.log(`🖼️ [Kling] Normalizing image: ${path.basename(localPath)} -> ${normalizedFileName}`);
+
+        await sharp(localPath)
+            .flatten({ background: { r: 255, g: 255, b: 255 } }) // Handle transparency by flattening onto white
+            .jpeg({ quality: 90 })
+            .toFile(normalizedPath);
+
+        const baseUrl = process.env.STORYBOARD_BASE_URL;
+        return `${baseUrl}/uploads/normalized/${normalizedFileName}`;
+    }
+
     static async createVideoTask(
         config: KlingConfig,
         prompt: string,
@@ -53,33 +103,6 @@ export class KlingService {
         aspectRatio: string = '16:9'
     ): Promise<string> {
 
-        let finalImageUrl = "";
-        if (frameUrl) {
-            const baseUrl = process.env.STORYBOARD_BASE_URL;
-            if (!baseUrl) throw new Error('STORYBOARD_BASE_URL environment variable is not set');
-
-            let relativePath = frameUrl;
-            if (frameUrl.startsWith('http')) {
-                // If it's a local URL, extract the path
-                if (frameUrl.includes('localhost') || frameUrl.includes('127.0.0.1')) {
-                    try {
-                        const urlObj = new URL(frameUrl);
-                        relativePath = urlObj.pathname;
-                    } catch (e) {
-                        console.error('Failed to parse URL:', frameUrl);
-                    }
-                } else {
-                    // It's already an external URL
-                    finalImageUrl = frameUrl;
-                }
-            }
-
-            if (!finalImageUrl) {
-                const cleanPath = relativePath.startsWith('/') ? relativePath : `/${relativePath}`;
-                finalImageUrl = `${baseUrl}${cleanPath}`;
-            }
-        }
-
         const payload: any = {
             prompt: prompt,
             aspect_ratio: aspectRatio,
@@ -87,7 +110,40 @@ export class KlingService {
             sound: sound
         };
 
-        if (finalImageUrl) {
+        if (frameUrl) {
+            let finalImageUrl = "";
+            const baseUrl = process.env.STORYBOARD_BASE_URL;
+            if (!baseUrl) throw new Error('STORYBOARD_BASE_URL environment variable is not set');
+
+            // URL Resilience: If it's an absolute URL pointing to any storyboard/railway instance, 
+            // extract the path so we can rebuild it with the CURRENT baseUrl.
+            if (frameUrl.startsWith('http')) {
+                const isLocal = frameUrl.includes('localhost') ||
+                    frameUrl.includes('127.0.0.1') ||
+                    frameUrl.includes('up.railway.app');
+
+                if (isLocal) {
+                    try {
+                        const urlObj = new URL(frameUrl);
+                        const relativePath = urlObj.pathname;
+                        finalImageUrl = `${baseUrl}${relativePath.startsWith('/') ? '' : '/'}${relativePath}`;
+                    } catch (e) {
+                        finalImageUrl = frameUrl; // Fallback
+                    }
+                } else {
+                    finalImageUrl = frameUrl;
+                }
+            } else {
+                const cleanPath = frameUrl.startsWith('/') ? frameUrl : `/${frameUrl}`;
+                finalImageUrl = `${baseUrl}${cleanPath}`;
+            }
+
+            // Image Normalization: Convert to JPEG to avoid format errors (alpha channel, PNG profiles, etc.)
+            try {
+                finalImageUrl = await this.normalizeImage(finalImageUrl);
+            } catch (normErr) {
+                console.error('⚠️ [Kling] Image normalization failed, using original:', normErr);
+            }
             payload.image_urls = [finalImageUrl];
         }
 
