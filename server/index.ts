@@ -623,7 +623,7 @@ app.post('/api/videos/sync', async (req: any, res: any) => {
         const videosPage = db.prepare("SELECT id FROM pages WHERE storyboard_id = ? AND type = 'videos'").get(storyboardId) as { id: string } | undefined;
         if (!videosPage) return res.status(404).json({ error: 'Videos page not found' });
 
-        const existingElements = db.prepare("SELECT content FROM elements WHERE page_id = ? AND type = 'video'").all() as { content: string }[];
+        const existingElements = db.prepare("SELECT content FROM elements WHERE page_id = ? AND type = 'video'").all(videosPage.id) as { content: string }[];
         const existingUrls = new Set(existingElements.map(e => JSON.parse(e.content).url));
 
         const files = fs.readdirSync(generatedDir).filter(file => file.endsWith('.mp4'));
