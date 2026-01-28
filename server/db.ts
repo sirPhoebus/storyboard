@@ -7,11 +7,20 @@ const db: any = new Database(dbPath);
 
 
 db.exec(`
-  CREATE TABLE IF NOT EXISTS storyboards (
+  CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS storyboards (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
   );
 
   CREATE TABLE IF NOT EXISTS pages (
@@ -118,11 +127,23 @@ try {
   // Column already exists
 }
 
+try {
+  db.exec('ALTER TABLE storyboards ADD COLUMN project_id TEXT');
+} catch (e) {
+  // Column already exists
+}
+
 // Seed initial data if empty
+const projectCount = db.prepare('SELECT COUNT(*) as count FROM projects').get() as { count: number };
 const storyboardCount = db.prepare('SELECT COUNT(*) as count FROM storyboards').get() as { count: number };
-if (storyboardCount.count === 0) {
+
+if (projectCount.count === 0 && storyboardCount.count === 0) {
+  // Fresh database - create everything from scratch
+  const projectId = 'default-project';
+  db.prepare('INSERT INTO projects (id, name) VALUES (?, ?)').run(projectId, 'My Project');
+
   const storyboardId = 'default-storyboard';
-  db.prepare('INSERT INTO storyboards (id, name) VALUES (?, ?)').run(storyboardId, 'My First Storyboard');
+  db.prepare('INSERT INTO storyboards (id, project_id, name) VALUES (?, ?, ?)').run(storyboardId, projectId, 'My First Storyboard');
 
   const chapterId = 'default-chapter';
   db.prepare('INSERT INTO chapters (id, storyboard_id, title, order_index) VALUES (?, ?, ?, ?)').run(chapterId, storyboardId, 'Chapter 1', 0);
@@ -150,6 +171,20 @@ if (storyboardCount.count === 0) {
     insertElement.run(el.id, el.page_id, el.type, el.x, el.y, el.width, el.height, JSON.stringify({ fill: el.fill }));
   }
 } else {
+  // Migration: Ensure default project exists and all storyboards are linked to it
+  const defaultProjectExists = db.prepare('SELECT id FROM projects WHERE id = ?').get('default-project');
+  if (!defaultProjectExists) {
+    db.prepare('INSERT INTO projects (id, name) VALUES (?, ?)').run('default-project', 'My Project');
+  }
+
+  // Update all storyboards without a project_id to use default-project
+  const storyboardsWithoutProject = db.prepare('SELECT id FROM storyboards WHERE project_id IS NULL').all() as { id: string }[];
+  if (storyboardsWithoutProject.length > 0) {
+    const updateStoryboard = db.prepare('UPDATE storyboards SET project_id = ? WHERE id = ?');
+    for (const sb of storyboardsWithoutProject) {
+      updateStoryboard.run('default-project', sb.id);
+    }
+  }
   // Migration: Ensure all pages have a chapter_id
   const pagesWithoutChapter = db.prepare('SELECT id FROM pages WHERE chapter_id IS NULL').all();
   if (pagesWithoutChapter.length > 0) {

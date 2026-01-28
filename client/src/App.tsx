@@ -1,16 +1,21 @@
 import { useEffect, useState, useCallback } from 'react'
 import Canvas from './components/Canvas'
 import Sidebar from './components/Sidebar'
+import ProjectTabs from './components/ProjectTabs'
 import { API_BASE_URL } from './config'
 import type { Chapter, Page } from './types'
 import { useSocket } from './hooks/useSocket'
+import { useProjects } from './hooks/useProjects'
 import HelpManual from './components/HelpManual'
 import BatchPage from './components/BatchPage'
-import { HelpCircle } from 'lucide-react'
+
 
 
 /* ... imports */
 function App() {
+  const socket = useSocket();
+  const { projects, currentProjectId, setCurrentProjectId, createProject, renameProject, deleteProject } = useProjects(socket);
+
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [currentChapterId, setCurrentChapterId] = useState<string | null>(null);
   const [allPages, setAllPages] = useState<Page[]>([]);
@@ -20,13 +25,36 @@ function App() {
   const [connectedUsers, setConnectedUsers] = useState(1);
   const [isManualOpen, setIsManualOpen] = useState(false);
   const [view, setView] = useState<'canvas' | 'batch'>('canvas');
-  const socket = useSocket();
+  const [currentStoryboardId, setCurrentStoryboardId] = useState<string | null>(null);
 
   const pages = allPages.filter(p => p.chapter_id === currentChapterId);
 
-  // Fetch Chapters
+  // Fetch Storyboard when Project Changes
+  useEffect(() => {
+    if (currentProjectId) {
+      // Reset state to avoid ghosting
+      setChapters([]);
+      setAllPages([]);
+      setCurrentChapterId(null);
+      setCurrentPageId(null);
+      setCurrentStoryboardId(null);
+
+      fetch(`${API_BASE_URL}/api/projects/${currentProjectId}/storyboard`)
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.id) {
+            setCurrentStoryboardId(data.id);
+          }
+        })
+        .catch(err => console.error("Failed to load storyboard", err));
+    }
+  }, [currentProjectId]);
+
+  // Fetch Chapters (filtered by project via storyboardId)
   const fetchChapters = useCallback(() => {
-    fetch(`${API_BASE_URL}/api/chapters?storyboardId=default-storyboard`)
+    if (!currentStoryboardId) return;
+
+    fetch(`${API_BASE_URL}/api/chapters?storyboardId=${currentStoryboardId}`)
       .then(res => res.json())
       .then(data => {
         if (!Array.isArray(data)) {
@@ -38,10 +66,12 @@ function App() {
           setCurrentChapterId(data[0].id);
         }
       });
-  }, [currentChapterId]);
+  }, [currentChapterId, currentStoryboardId]);
 
   const fetchPages = useCallback(() => {
-    const url = `${API_BASE_URL}/api/pages?storyboardId=default-storyboard`;
+    if (!currentStoryboardId) return;
+
+    const url = `${API_BASE_URL}/api/pages?storyboardId=${currentStoryboardId}`;
 
     fetch(url)
       .then(res => res.json())
@@ -60,7 +90,7 @@ function App() {
           setCurrentPageId(null);
         }
       });
-  }, [currentChapterId, currentPageId]);
+  }, [currentChapterId, currentPageId, currentStoryboardId]);
 
   useEffect(() => {
     fetchChapters();
@@ -162,7 +192,7 @@ function App() {
 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: `Chapter ${chapters.length + 1}`, storyboardId: 'default-storyboard' })
+      body: JSON.stringify({ title: `Chapter ${chapters.length + 1}`, storyboardId: currentStoryboardId })
     })
       .then(res => res.json())
       .then(newChapter => {
@@ -212,7 +242,7 @@ function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         title: `Page ${pages.length + 1}`,
-        storyboardId: 'default-storyboard',
+        storyboardId: currentStoryboardId,
         chapterId: currentChapterId
       })
     })
@@ -257,80 +287,68 @@ function App() {
   };
   */
 
+  const handleCreateProject = () => {
+    const name = prompt('Enter project name:');
+    if (name) {
+      createProject(name.trim() || 'New Project');
+    }
+  };
+
   return (
-    <div className="App" style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden' }}>
-      <Sidebar
-        chapters={chapters}
-        currentChapterId={currentChapterId}
-        onSelectChapter={setCurrentChapterId}
-        onAddChapter={handleAddChapter}
-        onDeleteChapter={handleDeleteChapter}
-        onRenameChapter={handleRenameChapter}
-        pages={pages}
-        currentPageId={currentPageId}
-        onSelectPage={handlePageSelection}
-        onAddPage={handleAddPage}
-        onRenamePage={handleRenamePage}
-        isCollapsed={isSidebarCollapsed}
-        onToggle={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-        onRefresh={fetchPages}
-        width={sidebarWidth}
-        onWidthChange={setSidebarWidth}
-        connectedUsers={connectedUsers}
+    <div className="App" style={{ display: 'flex', flexDirection: 'column', width: '100vw', height: '100vh', overflow: 'hidden' }}>
+      <ProjectTabs
+        projects={projects}
+        currentProjectId={currentProjectId}
+        onSelectProject={setCurrentProjectId}
+        onCreateProject={handleCreateProject}
+        onRenameProject={renameProject}
+        onDeleteProject={deleteProject}
+        onOpenHelp={() => setIsManualOpen(true)}
       />
 
-      {view === 'canvas' ? (
-        <Canvas
-          pageId={currentPageId}
-          isSidebarCollapsed={isSidebarCollapsed}
-          sidebarWidth={sidebarWidth}
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        <Sidebar
           chapters={chapters}
-          allPages={allPages}
+          currentChapterId={currentChapterId}
+          onSelectChapter={setCurrentChapterId}
+          onAddChapter={handleAddChapter}
+          onDeleteChapter={handleDeleteChapter}
+          onRenameChapter={handleRenameChapter}
+          pages={pages}
+          currentPageId={currentPageId}
           onSelectPage={handlePageSelection}
-          onOpenBatchManagement={() => setView('batch')}
-          socket={socket}
+          onAddPage={handleAddPage}
+          onRenamePage={handleRenamePage}
+          isCollapsed={isSidebarCollapsed}
+          onToggle={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+          onRefresh={fetchPages}
+          width={sidebarWidth}
+          onWidthChange={setSidebarWidth}
+          connectedUsers={connectedUsers}
         />
-      ) : (
-        <BatchPage
-          socket={socket}
-        />
-      )}
 
-      {/* Floating Action Buttons */}
-      <div style={{
-        position: 'fixed',
-        top: '20px',
-        left: isSidebarCollapsed ? '86px' : `${sidebarWidth + 20}px`,
-        display: 'flex',
-        flexDirection: 'row',
-        gap: '12px',
-        zIndex: 100,
-        transition: 'left 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
-      }}>
-        {/* Batch Management has been moved to contextual menu */}
-
-        <button
-          onClick={() => setIsManualOpen(true)}
-          style={{
-            background: 'rgba(30,30,30,0.8)',
-            backdropFilter: 'blur(10px)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            borderRadius: '12px',
-            width: '42px',
-            height: '42px',
-            color: 'white',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            transition: 'all 0.2s',
-            boxShadow: '0 4px 15px rgba(0,0,0,0.3)'
-          }}
-          className="hover-lift"
-        >
-          <HelpCircle size={24} />
-        </button>
+        {view === 'canvas' ? (
+          <Canvas
+            pageId={currentPageId}
+            isSidebarCollapsed={isSidebarCollapsed}
+            sidebarWidth={sidebarWidth}
+            chapters={chapters}
+            allPages={allPages}
+            onSelectPage={handlePageSelection}
+            onOpenBatchManagement={() => setView('batch')}
+            socket={socket}
+            currentProjectId={currentProjectId}
+          />
+        ) : (
+          <BatchPage
+            socket={socket}
+          />
+        )}
       </div>
+
+
+
+
 
       <HelpManual isOpen={isManualOpen} onClose={() => setIsManualOpen(false)} />
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, forwardRef } from 'react';
 import { Image as KonvaImage, Group, Rect, Text } from 'react-konva';
 import Konva from 'konva';
 import useImage from 'use-image';
+import { API_BASE_URL } from '../config';
 
 interface MultimediaElementProps {
     id: string;
@@ -48,8 +49,11 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
     rating = 0,
     onUpdateElement,
 }, ref) => {
+    // Ensure we use the full URL if it's relative, as we might not have a proxy set up
+    const fullUrl = url.startsWith('http') ? url : `${API_BASE_URL}${url}`;
+
     // Only fetch image if type is image to save resources
-    const [image] = useImage(type === 'image' ? url : '', 'anonymous');
+    const [image] = useImage(type === 'image' ? fullUrl : '', 'anonymous');
     const videoRef = useRef<HTMLVideoElement | null>(null);
     const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
     const imageRef = useRef<Konva.Image>(null);
@@ -76,7 +80,7 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
     useEffect(() => {
         if (type === 'video') {
             const video = document.createElement('video');
-            video.src = url;
+            video.src = fullUrl;
             video.crossOrigin = 'Anonymous';
             video.loop = true;
             video.muted = isMuted;

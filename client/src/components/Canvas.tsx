@@ -18,6 +18,7 @@ interface CanvasProps {
     onSelectPage: (id: string) => void;
     onOpenBatchManagement?: () => void;
     socket: Socket | null;
+    currentProjectId: string | null;
 }
 
 import type { UploadState } from './canvas/UploadProgress';
@@ -25,7 +26,7 @@ interface RawElement extends Partial<Element> {
     content: string | Record<string, unknown>;
 }
 
-const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidth, chapters, allPages, onSelectPage, onOpenBatchManagement, socket }) => {
+const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidth, chapters, allPages, onSelectPage, onOpenBatchManagement, socket, currentProjectId }) => {
 
 
     const [elements, setElements] = useState<Element[]>([]);
@@ -797,6 +798,10 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 const { url, type } = await new Promise<{ url: string, type: string }>((resolve, reject) => {
                     const xhr = new XMLHttpRequest();
                     const formData = new FormData();
+
+                    // IMPORTANT: Append non-file fields FIRST so multer/busboy can read them
+                    // before processing the file stream.
+                    formData.append('projectId', currentProjectId || 'default-project');
                     formData.append('file', file);
 
                     xhr.upload.onprogress = (e) => {
@@ -830,9 +835,12 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 let finalWidth: number | undefined;
                 let finalHeight: number | undefined;
 
+                // Ensure we use the full URL for metadata loading since we don't have a proxy for /uploads
+                const fullUrl = url.startsWith('http') ? url : `${API_BASE_URL}${url}`;
+
                 if (elementType === 'image') {
                     const img = new Image();
-                    img.src = url;
+                    img.src = fullUrl;
                     await new Promise((resolve, reject) => {
                         img.onload = () => {
                             const ratio = img.width / img.height;
@@ -850,7 +858,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                     });
                 } else if (elementType === 'video') {
                     const video = document.createElement('video');
-                    video.src = url;
+                    video.src = fullUrl;
                     await new Promise((resolve, reject) => {
                         video.onloadedmetadata = () => {
                             const ratio = video.videoWidth / video.videoHeight;

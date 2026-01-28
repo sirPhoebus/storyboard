@@ -24,10 +24,18 @@ export interface Element {
     rating?: number;
 }
 
+export interface Project {
+    id: string;
+    name: string;
+    created_at: string;
+    updated_at: string;
+}
+
 export interface Chapter {
     id: string;
     title: string;
     storyboardId: string;
+    projectId?: string;
 }
 
 export interface Page {

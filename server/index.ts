@@ -30,10 +30,18 @@ app.use('/uploads', (req, res, next) => {
 }, express.static(uploadsDir));
 
 
-// Configure Multer
+// Configure Multer with dynamic project-based paths
 const storage = multer.diskStorage({
     destination: (req: any, file: any, cb: any) => {
-        cb(null, uploadsDir);
+        const projectId = req.body.projectId || 'default-project';
+        const projectDir = path.join(uploadsDir, projectId);
+
+        // Ensure project directory exists
+        if (!fs.existsSync(projectDir)) {
+            fs.mkdirSync(projectDir, { recursive: true });
+        }
+
+        cb(null, projectDir);
     },
 
     filename: (req: any, file: any, cb: any) => {
@@ -49,7 +57,110 @@ const io = new Server(httpServer, {
     }
 });
 
-// API Endpoints
+// ===========================
+// PROJECT ENDPOINTS
+// ===========================
+
+app.get('/api/projects', (req: any, res: any) => {
+    const projects = db.prepare('SELECT * FROM projects ORDER BY created_at ASC').all();
+    res.json(projects);
+});
+
+app.post('/api/projects', (req: any, res: any) => {
+    const { name } = req.body;
+    const id = crypto.randomUUID();
+
+    try {
+        db.prepare('INSERT INTO projects (id, name) VALUES (?, ?)').run(id, name || 'New Project');
+
+        // Auto-create a default storyboard for the new project
+        const storyboardId = crypto.randomUUID();
+        db.prepare('INSERT INTO storyboards (id, project_id, name) VALUES (?, ?, ?)').run(
+            storyboardId, id, 'My First Storyboard'
+        );
+
+        // Auto-create first chapter and page
+        const chapterId = crypto.randomUUID();
+        db.prepare('INSERT INTO chapters (id, storyboard_id, title, order_index) VALUES (?, ?, ?, ?)').run(
+            chapterId, storyboardId, 'Chapter 1', 0
+        );
+
+        const pageId = crypto.randomUUID();
+        db.prepare('INSERT INTO pages (id, storyboard_id, chapter_id, title, order_index) VALUES (?, ?, ?, ?, ?)').run(
+            pageId, storyboardId, chapterId, 'Page 1', 0
+        );
+
+        // Create Videos page for the first chapter
+        const videosPageId = crypto.randomUUID();
+        db.prepare('INSERT INTO pages (id, storyboard_id, chapter_id, title, order_index, type) VALUES (?, ?, ?, ?, ?, ?)').run(
+            videosPageId, storyboardId, chapterId, 'Videos', -1, 'videos'
+        );
+
+        const newProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+        io.emit('project:add', newProject);
+        res.json(newProject);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.patch('/api/projects/:id', (req: any, res: any) => {
+    const { name } = req.body;
+    try {
+        db.prepare('UPDATE projects SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(name, req.params.id);
+        const updatedProject = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
+        io.emit('project:update', updatedProject);
+        res.json(updatedProject);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete('/api/projects/:id', (req: any, res: any) => {
+    const projectId = req.params.id;
+
+    // Prevent deletion of the last project
+    const projectCount = db.prepare('SELECT COUNT(*) as count FROM projects').get() as { count: number };
+    if (projectCount.count <= 1) {
+        return res.status(403).json({ error: 'Cannot delete the last project' });
+    }
+
+    try {
+        // CASCADE will handle storyboards, chapters, pages, elements
+        db.prepare('DELETE FROM projects WHERE id = ?').run(projectId);
+
+        // Delete project assets folder
+        const projectDir = path.join(uploadsDir, projectId);
+        if (fs.existsSync(projectDir)) {
+            console.log(`🗑️ Deleting project folder: ${projectDir}`);
+            fs.rmSync(projectDir, { recursive: true, force: true });
+        }
+
+        io.emit('project:delete', { id: projectId });
+        res.json({ success: true });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get storyboard for a project
+app.get('/api/projects/:id/storyboard', (req: any, res: any) => {
+    const projectId = req.params.id;
+    try {
+        const storyboard = db.prepare('SELECT * FROM storyboards WHERE project_id = ?').get(projectId);
+        if (!storyboard) {
+            return res.status(404).json({ error: 'Storyboard not found for this project' });
+        }
+        res.json(storyboard);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ===========================
+// CHAPTER ENDPOINTS
+// ===========================
+
 app.get('/api/chapters', (req: any, res: any) => {
     const { storyboardId } = req.query;
     if (!storyboardId) return res.status(400).json({ error: 'storyboardId required' });
@@ -375,6 +486,13 @@ app.post('/api/pages/:id/move-chapter', (req: any, res: any) => {
     }
 });
 
+// Helper to resolve file path from URL
+const getFilePathFromUrl = (url: string) => {
+    // Remove leading /uploads/ to get relative path (e.g., 'projectId/file.png' or 'file.png')
+    const relativePath = url.replace(/^\/uploads\//, '');
+    return path.join(uploadsDir, relativePath);
+};
+
 const hardDeleteAssets = (ids: string[]) => {
     try {
         if (!ids || ids.length === 0) return;
@@ -386,7 +504,7 @@ const hardDeleteAssets = (ids: string[]) => {
             const content = JSON.parse(el.content || '{}');
             if (content.url) {
                 const fileName = path.basename(content.url);
-                const filePath = path.join(uploadsDir, fileName);
+                const filePath = getFilePathFromUrl(content.url);
 
                 // Check if any OTHER element uses this file
                 // We exclude the elements being deleted from the check
@@ -480,7 +598,8 @@ app.post('/api/upload', upload.single('file'), (req: any, res: any) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
     }
-    const url = `/uploads/${req.file.filename}`;
+    const projectId = req.body.projectId || 'default-project';
+    const url = `/uploads/${projectId}/${req.file.filename}`;
     res.json({ url, type: req.file.mimetype });
 });
 
@@ -503,9 +622,8 @@ app.post('/api/download-zip', (req: any, res: any) => {
         elements.forEach(el => {
             const content = JSON.parse(el.content);
             if (content.url) {
-                // Extract filename from URL (e.g., http://localhost:5000/uploads/123-file.jpg -> 123-file.jpg)
+                const filePath = getFilePathFromUrl(content.url);
                 const fileName = path.basename(content.url);
-                const filePath = path.join(uploadsDir, fileName);
 
                 if (fs.existsSync(filePath)) {
                     archive.file(filePath, { name: fileName });
