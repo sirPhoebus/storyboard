@@ -1,6 +1,6 @@
 import React from 'react';
 import { API_BASE_URL } from '../config';
-import type { Page, Chapter } from '../types';
+import type { Page, Chapter, Project } from '../types';
 import { Clapperboard, Film } from 'lucide-react';
 
 
@@ -23,11 +23,12 @@ interface SidebarProps {
     width: number;
     onWidthChange: (width: number) => void;
     connectedUsers?: number;
+    projects?: Project[];
 }
 const Sidebar: React.FC<SidebarProps> = ({
     chapters, currentChapterId, onSelectChapter, onAddChapter, onDeleteChapter, onRenameChapter,
     pages, currentPageId, onSelectPage, onAddPage, onRenamePage, isCollapsed, onToggle, onRefresh,
-    width, onWidthChange, connectedUsers = 1
+    width, onWidthChange, connectedUsers = 1, projects = []
 }) => {
     const [isResizing, setIsResizing] = React.useState(false);
 
@@ -622,10 +623,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                     textAlign: 'center'
                 }}>
                     <h3 style={{ color: 'white', marginBottom: '10px' }}>Move Page?</h3>
-                    <p style={{ color: '#aaa', fontSize: '0.9em', marginBottom: '20px' }}>Select destination chapter:</p>
+                    <p style={{ color: '#aaa', fontSize: '0.9em', marginBottom: '10px' }}>Move to Chapter (Current Project):</p>
                     <div style={{
                         width: '100%',
-                        maxHeight: '200px',
+                        maxHeight: '150px',
                         overflowY: 'auto',
                         background: 'rgba(255,255,255,0.05)',
                         borderRadius: '6px',
@@ -659,6 +660,61 @@ const Sidebar: React.FC<SidebarProps> = ({
                             </div>
                         ))}
                     </div>
+
+                    {projects && projects.length > 1 && (
+                        <>
+                            <div style={{ width: '100%', height: '1px', background: 'rgba(255,255,255,0.1)', marginBottom: '10px' }}></div>
+                            <p style={{ color: '#aaa', fontSize: '0.9em', marginBottom: '10px' }}>OR Move to Another Project:</p>
+                            <div style={{
+                                width: '100%',
+                                maxHeight: '150px',
+                                overflowY: 'auto',
+                                background: 'rgba(255,255,255,0.05)',
+                                borderRadius: '6px',
+                                marginBottom: '20px',
+                                padding: '5px'
+                            }}>
+                                {projects.map(proj => {
+                                    // Let's rely on user not selecting current or backend handling it.
+                                    return (
+                                        <div
+                                            key={proj.id}
+                                            onClick={async (e) => {
+                                                e.stopPropagation();
+                                                if (confirm(`Move page to project "${proj.name}"?\nNote: Images/Videos might not be visible if source project is deleted.`)) {
+                                                    await fetch(`${API_BASE_URL}/api/pages/${movingPageId}/move-project`, {
+                                                        method: 'POST',
+                                                        headers: { 'Content-Type': 'application/json' },
+                                                        body: JSON.stringify({ targetProjectId: proj.id })
+                                                    });
+                                                    setMovingPageId(null);
+                                                    if (onRefresh) onRefresh();
+                                                }
+                                            }}
+                                            style={{
+                                                padding: '10px',
+                                                borderRadius: '4px',
+                                                color: 'white',
+                                                cursor: 'pointer',
+                                                fontSize: '14px',
+                                                textAlign: 'left',
+                                                background: 'transparent',
+                                                marginBottom: '2px',
+                                                display: 'flex',
+                                                justifyContent: 'space-between',
+                                                alignItems: 'center'
+                                            }}
+                                            onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+                                            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                                        >
+                                            {proj.name}
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </>
+                    )}
+
                     <button
                         onClick={() => setMovingPageId(null)}
                         style={{

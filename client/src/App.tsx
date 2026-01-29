@@ -325,6 +325,7 @@ function App() {
           width={sidebarWidth}
           onWidthChange={setSidebarWidth}
           connectedUsers={connectedUsers}
+          projects={projects}
         />
 
         {view === 'canvas' ? (

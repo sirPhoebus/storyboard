@@ -467,6 +467,7 @@ app.patch('/api/pages/:id', (req: any, res: any) => {
     }
 });
 
+
 app.post('/api/pages/:id/move-chapter', (req: any, res: any) => {
     const { chapterId } = req.body;
     const pageId = req.params.id;
@@ -485,6 +486,56 @@ app.post('/api/pages/:id/move-chapter', (req: any, res: any) => {
         res.status(500).json({ error: err.message });
     }
 });
+
+app.post('/api/pages/:id/move-project', (req: any, res: any) => {
+    const { targetProjectId } = req.body;
+    const pageId = req.params.id;
+
+    if (!targetProjectId) return res.status(400).json({ error: 'targetProjectId required' });
+
+    try {
+        // Find default storyboard for target project
+        const storyboard = db.prepare('SELECT id FROM storyboards WHERE project_id = ?').get(targetProjectId) as { id: string } | undefined;
+        if (!storyboard) return res.status(404).json({ error: 'Target project has no storyboard' });
+
+        // Find a suitable chapter in the target storyboard (e.g., first chapter or "Imported")
+        let chapter = db.prepare('SELECT id FROM chapters WHERE storyboard_id = ? ORDER BY order_index ASC LIMIT 1').get(storyboard.id) as { id: string } | undefined;
+
+        // If no chapter exists, create one
+        if (!chapter) {
+            const newChapterId = crypto.randomUUID();
+            db.prepare('INSERT INTO chapters (id, storyboard_id, title, order_index) VALUES (?, ?, ?, ?)').run(
+                newChapterId, storyboard.id, 'Imported Pages', 0
+            );
+            chapter = { id: newChapterId };
+            io.emit('chapter:add', { id: newChapterId, storyboard_id: storyboard.id, title: 'Imported Pages', order_index: 0 });
+        }
+
+        // Get new order index
+        const countResult = db.prepare('SELECT COUNT(*) as count FROM pages WHERE chapter_id = ?').get(chapter.id) as any;
+        const newOrderIndex = countResult ? countResult.count : 0;
+
+        // Perform the move
+        db.prepare('UPDATE pages SET storyboard_id = ?, chapter_id = ?, order_index = ? WHERE id = ?').run(
+            storyboard.id, chapter.id, newOrderIndex, pageId
+        );
+
+        const updatedPage = db.prepare('SELECT * FROM pages WHERE id = ?').get(pageId) as any;
+
+        // Broadcast events
+        // 1. Tell current project it's gone
+        io.emit('page:delete', { id: pageId });
+
+        // 2. Tell target project users (or global listeners) it's added/moved there
+        // Actually, since we're filtering by storyboard on client, 'page:add' might be safer if the client isn't smart enough to handle a 'move across storyboards' event
+        io.emit('page:add', updatedPage);
+
+        res.json({ success: true });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 
 // Helper to resolve file path from URL
 const getFilePathFromUrl = (url: string) => {
