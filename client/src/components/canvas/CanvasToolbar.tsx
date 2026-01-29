@@ -16,7 +16,6 @@ interface CanvasToolbarProps {
     onAddArrow: () => void;
     onAddMedia: () => void;
     onUpdateStyle: (id: string, style: Partial<Element>) => void;
-    onLocalVideoControl: (id: string, control: Partial<Element>) => void;
     onReorder: (direction: 'front' | 'back') => void;
     onDelete: (ids: string[]) => void;
     onDownload: () => void;
@@ -42,7 +41,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
     onAddArrow,
     onAddMedia,
     onUpdateStyle,
-    onLocalVideoControl,
+    // onLocalVideoControl, // Removed - mute button no longer needed
     onReorder,
     onDelete,
     onDownload,
@@ -200,16 +199,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
                     </>
                 )}
 
-            {selectedElement && selectedElement.type === 'video' && (
-                <>
-                    <button
-                        onClick={() => onLocalVideoControl(selectedElement.id, { isMuted: !selectedElement.isMuted })}
-                        style={selectedElement.isMuted ? activeSubButtonStyle : subButtonStyle}
-                    >
-                        {selectedElement.isMuted ? 'Unmute' : 'Mute'}
-                    </button>
-                </>
-            )}
+
 
             {selectedElement && selectedElement.type === 'text' && (
                 <>

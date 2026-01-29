@@ -44,7 +44,7 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
     isSelected,
     onClick,
     onContextMenu,
-    isPlaying = true,
+    isPlaying = false,  // Changed: videos don't autoplay by default
     isMuted = true,
     rating = 0,
     onUpdateElement,
@@ -58,11 +58,19 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
     const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
     const imageRef = useRef<Konva.Image>(null);
     const [isHovered, setIsHovered] = useState(false);
+    const [isVideoPlaying, setIsVideoPlaying] = useState(isPlaying); // Track video playing state
+
+    // Control video playback based on hover state
+    useEffect(() => {
+        if (type === 'video') {
+            setIsVideoPlaying(isHovered);
+        }
+    }, [isHovered, type]);
 
     // Sync play/pause and mute/unmute
     useEffect(() => {
         if (type === 'video' && videoElement) {
-            if (isPlaying) {
+            if (isVideoPlaying) {
                 videoElement.play().catch(() => {
                     console.warn('Video play failed - possibly browser policy');
                 });
@@ -74,7 +82,7 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
                 videoRef.current.muted = isMuted;
             }
         }
-    }, [isPlaying, isMuted, videoElement, type]);
+    }, [isVideoPlaying, isMuted, videoElement, type]);
 
     // Video Setup & Cleanup
     useEffect(() => {
@@ -94,15 +102,27 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
             let anim: Konva.Animation | null = null;
 
             video.oncanplay = () => {
+                // Ensure first frame is available
+                // Usually waiting for 'loadeddata' or 'canplay' is enough,
+                // but we explicitly tell Konva to redraw once.
                 if (imageRef.current) {
                     const layer = imageRef.current.getLayer();
                     if (layer && !anim) {
                         anim = new Konva.Animation(() => {
-                            // Redraw the layer if the video is playing
-                            // Konva.Image automatically uses the video element if passed as 'image' prop
+                            // Redraw the layer if the video is playing or needs update
                         }, layer);
                         anim.start();
                     }
+                }
+            };
+
+            // Force first frame render when data is loaded
+            video.onloadeddata = () => {
+                if (video.currentTime === 0) {
+                    video.currentTime = 0.001; // Tiny nudge to ensure frame buffer is valid
+                }
+                if (imageRef.current && imageRef.current.getLayer()) {
+                    imageRef.current.getLayer()?.batchDraw();
                 }
             };
 

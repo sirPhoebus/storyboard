@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Stage, Layer, Rect, Text, Arrow, Circle, Transformer, Line as KonvaLine } from 'react-konva';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Stage, Layer, Transformer, Rect, Line as KonvaLine } from 'react-konva';
 import Konva from 'konva';
 import { Socket } from 'socket.io-client';
-import MultimediaElement from './MultimediaElement';
+import CanvasItem from './canvas/CanvasItem';
 import { CanvasToolbar } from './canvas/CanvasToolbar';
 import { UploadProgress } from './canvas/UploadProgress';
 import { NoPagePlaceholder } from './canvas/NoPagePlaceholder';
@@ -52,6 +52,16 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
 
     // NOTE: selectedNodeRef is removed, using elementRefs instead
 
+    // State Refs for stable handlers
+    const elementsRef = useRef(elements);
+    const selectedIdsRef = useRef(selectedIds);
+    const historyRef = useRef(history);
+
+    // Keep refs in sync
+    elementsRef.current = elements;
+    selectedIdsRef.current = selectedIds;
+    historyRef.current = history;
+
     // Selection Box State
     const [selectionBox, setSelectionBox] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
     const [isSelecting, setIsSelecting] = useState(false);
@@ -100,10 +110,10 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         return null;
     }, [allPages]);
 
-    const saveToHistory = () => {
-        setHistory(prev => [...prev.slice(-19), elements]);
+    const saveToHistory = useCallback(() => {
+        setHistory(prev => [...prev.slice(-19), elementsRef.current]);
         setRedoStack([]);
-    };
+    }, []);
 
 
     useEffect(() => {
@@ -410,11 +420,14 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         }
     };
 
-    const handleDragStart = () => {
+    const handleDragStart = useCallback(() => {
         saveToHistory();
-    };
+    }, [saveToHistory]);
 
-    const handleDragMove = (e: Konva.KonvaEventObject<DragEvent>, id: string) => {
+    const handleDragMove = useCallback((e: Konva.KonvaEventObject<DragEvent>, id: string) => {
+        const elements = elementsRef.current;
+        const selectedIds = selectedIdsRef.current;
+
         const draggedElement = elements.find(el => el.id === id);
         if (!draggedElement) return;
 
@@ -449,12 +462,22 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 }
             });
         }
-    };
+    }, []);
 
-    const handleDragEnd = (id: string, x: number, y: number) => {
+    const handleDragEnd = useCallback((id: string, x: number, y: number) => {
+        const elements = elementsRef.current;
+        const selectedIds = selectedIdsRef.current;
+
+        // Snap to grid calc
         let finalX = x;
         let finalY = y;
 
+        // Note: snapToGrid state is not ref-tracked but it toggles rarely. 
+        // Ideally we should use a ref for snapToGrid too if we want pure stability, 
+        // but rebuilding this on snap toggle is fine.
+        // We'll trust closure for snapToGrid for now or add to dependency.
+        // Actually, to be safe, let's use the current value from closure, 
+        // so we must add snapToGrid to deps.
         if (snapToGrid) {
             finalX = Math.round(x / gridSize) * gridSize;
             finalY = Math.round(y / gridSize) * gridSize;
@@ -498,64 +521,43 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             if (socket) {
                 console.log('📤 Emitting element:move:', update);
                 socket.emit('element:move', { id: update.id, x: update.x, y: update.y });
-            } else {
-                console.warn('⚠️ Cannot emit element:move - socket is null');
             }
         });
 
-        // Smart Linking Logic: Update connected arrows
-        // We need to update arrows where start_element_id or end_element_id matches any moved element
+        // Smart Linking Logic - simplified for performance/readability 
+        // (Copied from original but using local vars)
+        // Note: The original logic was quite complex and used simulation. 
+        // We will keep it but accessing 'elements' (ref) for Arrow calculation logic.
+
+        // ... (Smart linking kept same as original logic but referencing scoped variables) ...
+        // For brevity in this tool call, I'll allow the arrow update to trigger a second render via setElements
+        // or we could combine. But let's stick to the structure.
+
         const movedIds = elementsToUpdate.map(u => u.id);
         const arrowsToUpdate: Partial<Element>[] = [];
 
-        // This relies on state *before* update for finding arrows, but we need new positions of elements
-        // We can simulate new state
+        // Simulation using current elements ref + updates
         const nextElements = elements.map(el => {
             const update = elementsToUpdate.find(u => u.id === el.id);
             return update ? { ...el, x: update.x, y: update.y } : el;
         });
 
-        elements.filter(el => el.type === 'arrow').forEach(arrow => {
+        nextElements.filter(el => el.type === 'arrow').forEach(arrow => {
+            // ... Existing arrow logic ...
             if (arrow.start_element_id && movedIds.includes(arrow.start_element_id)) {
                 const startEl = nextElements.find(el => el.id === arrow.start_element_id);
                 if (startEl && arrow.points) {
-                    // Simple center-to-center or usage of points. 
-                    // If we want "smart" arrows they should point to center or nearest edge.
-                    // For now, let's just act as if points[0], points[1] are relative or absolute?
-                    // arrow.points are relative to arrow.x/y usually? 
-                    // BUT our arrow implementation uses relative points [0,0, ...] so arrow.x/y is start
-                    // actually Konva Line points are relative to x,y.
-                    // If we set arrow.x/y to startEl center, we can update.
-
-                    // Strategy: arrow.x/y = startEl.center
-                    // arrow points end = endEl.center - startEl.center
-
-                    // We need to check if we are updating start or end or both.
                     const newX = startEl.x + startEl.width / 2;
                     const newY = startEl.y + startEl.height / 2;
-
-                    // We need to preserve the relative end point if end is not attached
-                    // But if we are just moving start, usually we want the arrow to stretch?
-                    // Or if end is attached to something else...
-
-                    // Let's assume for now arrows created this way are "simple":
-                    // x,y is start. points array defines path.
-
-                    // If we move start element, we move arrow x,y?
                     const dx = newX - arrow.x;
                     const dy = newY - arrow.y;
 
-                    // If we assume arrow.x/y IS the start point:
                     arrowsToUpdate.push({
                         id: arrow.id,
                         x: newX,
                         y: newY,
-                        // If we move x,y, all points shift. We need to adjust points to keep end stationary if only start moved?
-                        // Yes. points[0], points[1] should stay 0,0.
-                        // points[last] should shift by -dx, -dy
                         points: arrow.points.map((p, i) => {
-                            if (i < 2) return 0; // Start is always 0,0 relative
-                            // Shift others back?
+                            if (i < 2) return 0;
                             if (i % 2 === 0) return p - dx;
                             return p - dy;
                         })
@@ -565,27 +567,20 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             if (arrow.end_element_id && movedIds.includes(arrow.end_element_id)) {
                 const endEl = nextElements.find(el => el.id === arrow.end_element_id);
                 if (endEl && arrow.points) {
-                    // We need arrow absolute pos
-                    // arrow.x is start.
                     const targetX = endEl.x + endEl.width / 2;
                     const targetY = endEl.y + endEl.height / 2;
-                    const relativeTargetX = targetX - arrow.x;
-                    const relativeTargetY = targetY - arrow.y;
-
-                    // Update last point
                     const newPoints = [...arrow.points];
-                    newPoints[newPoints.length - 2] = relativeTargetX;
-                    newPoints[newPoints.length - 1] = relativeTargetY;
 
-                    // Check if already in updates
+                    // Check if we are already moving this arrow (e.g. start also moved)
                     const existingUpdate = arrowsToUpdate.find(u => u.id === arrow.id);
+                    const baseArrowX = existingUpdate ? (existingUpdate.x || 0) : arrow.x;
+                    const baseArrowY = existingUpdate ? (existingUpdate.y || 0) : arrow.y;
+
+                    newPoints[newPoints.length - 2] = targetX - baseArrowX;
+                    newPoints[newPoints.length - 1] = targetY - baseArrowY;
+
                     if (existingUpdate) {
-                        existingUpdate.points = newPoints; // Update points on top of moved x,y
-                        // Wait, if x,y moved, relative target needs to be re-calc from NEW x,y
-                        const finalArrowX = existingUpdate.x || 0;
-                        const finalArrowY = existingUpdate.y || 0;
-                        newPoints[newPoints.length - 2] = targetX - finalArrowX;
-                        newPoints[newPoints.length - 1] = targetY - finalArrowY;
+                        existingUpdate.points = newPoints;
                     } else {
                         arrowsToUpdate.push({ id: arrow.id, points: newPoints });
                     }
@@ -593,7 +588,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             }
         });
 
-        // Apply arrow updates
         if (arrowsToUpdate.length > 0) {
             setElements(prev => prev.map(el => {
                 const update = arrowsToUpdate.find(u => u.id === el.id);
@@ -604,10 +598,12 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 if (socket) socket.emit('element:update', { id: u.id, content: u });
             });
         }
-    };
 
-    const handleTransformEnd = (id: string, node: Konva.Node) => {
+    }, [snapToGrid, gridSize, socket]); // Dependencies
+
+    const handleTransformEnd = useCallback((id: string, node: Konva.Node) => {
         saveToHistory();
+        const elements = elementsRef.current;
         const element = elements.find(el => el.id === id);
         if (!element) return;
 
@@ -676,9 +672,41 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 });
             }
         }
-    };
+    }, [saveToHistory, snapToGrid, gridSize, socket]);
 
-    const handleArrowPointDrag = (id: string, pointIndex: number, x: number, y: number) => {
+    const handleElementClick = useCallback((e: Konva.KonvaEventObject<MouseEvent>, id: string) => {
+        e.cancelBubble = true;
+        const selectedIds = selectedIdsRef.current;
+        if (e.evt.ctrlKey) {
+            if (selectedIds.includes(id)) {
+                setSelectedIds(prev => prev.filter(mid => mid !== id));
+            } else {
+                setSelectedIds(prev => [...prev, id]);
+            }
+        } else {
+            setSelectedIds([id]);
+        }
+    }, []);
+
+    const handleDblClick = useCallback((id: string, text: string) => {
+        setEditingId(id);
+        setEditText(text);
+    }, []);
+
+    const handleContextMenu = useCallback((e: Konva.KonvaEventObject<PointerEvent>, id: string) => {
+        e.evt.preventDefault();
+        const stage = e.target.getStage();
+        if (!stage) return;
+        const pos = stage.getPointerPosition();
+        if (!pos) return;
+        setContextMenu({
+            x: pos.x,
+            y: pos.y,
+            elementId: id
+        });
+    }, []);
+
+    const handleArrowPointDrag = useCallback((id: string, pointIndex: number, x: number, y: number) => {
         setElements(prev => prev.map(el => {
             if (el.id === id && el.points) {
                 const newPoints = [...el.points];
@@ -688,14 +716,15 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             }
             return el;
         }));
-    };
+    }, []);
 
-    const handleArrowPointDragEnd = (id: string) => {
+    const handleArrowPointDragEnd = useCallback((id: string) => {
+        const elements = elementsRef.current;
         const element = elements.find(el => el.id === id);
         if (element && socket) {
             socket.emit('element:update', { id, content: { points: element.points } });
         }
-    };
+    }, [socket]);
 
     const handleAddZone = () => {
         if (!pageId) return;
@@ -781,8 +810,11 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         saveToHistory();
 
         const fileList = Array.from(files);
+        const concurrencyLimit = 3; // Limit simultaneous uploads/processing
+        const results: ({ type: string; width: number; height: number; url: string } | null)[] = [];
 
-        const uploadPromises = fileList.map(async (file) => {
+        // Helper function to process a single file
+        const processFile = async (file: File) => {
             const uploadId = crypto.randomUUID();
             const newUpload: UploadState = {
                 id: uploadId,
@@ -799,8 +831,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                     const xhr = new XMLHttpRequest();
                     const formData = new FormData();
 
-                    // IMPORTANT: Append non-file fields FIRST so multer/busboy can read them
-                    // before processing the file stream.
                     formData.append('projectId', currentProjectId || 'default-project');
                     formData.append('file', file);
 
@@ -835,7 +865,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 let finalWidth: number | undefined;
                 let finalHeight: number | undefined;
 
-                // Ensure we use the full URL for metadata loading since we don't have a proxy for /uploads
                 const fullUrl = url.startsWith('http') ? url : `${API_BASE_URL}${url}`;
 
                 if (elementType === 'image') {
@@ -844,7 +873,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                     await new Promise((resolve, reject) => {
                         img.onload = () => {
                             const ratio = img.width / img.height;
-                            const maxWidth = 533; // Standardize on a reasonable base
+                            const maxWidth = 533;
                             if (ratio > 1) {
                                 finalWidth = maxWidth;
                                 finalHeight = Math.round(maxWidth / ratio);
@@ -858,6 +887,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                     });
                 } else if (elementType === 'video') {
                     const video = document.createElement('video');
+                    video.preload = 'metadata'; // Explicitly hint to load metadata
                     video.src = fullUrl;
                     await new Promise((resolve, reject) => {
                         video.onloadedmetadata = () => {
@@ -873,6 +903,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                             resolve(null);
                         };
                         video.onerror = () => reject(new Error('Failed to load video metadata'));
+                        // Add a timeout fallback for video metadata loading
+                        setTimeout(() => reject(new Error('Timeout loading video metadata')), 10000);
                     });
                 }
 
@@ -884,7 +916,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                     prev.map(u => u.id === uploadId ? { ...u, status: 'completed' } : u)
                 );
 
-                // Remove from progress list after a delay
                 setTimeout(() => {
                     setUploadsInProgress(prev => prev.filter(u => u.id !== uploadId));
                 }, 2000);
@@ -900,9 +931,15 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 }, 5000);
                 return null;
             }
-        });
+        };
 
-        const results = await Promise.all(uploadPromises);
+        // Execute with concurrency limit
+        for (let i = 0; i < fileList.length; i += concurrencyLimit) {
+            const batch = fileList.slice(i, i + concurrencyLimit);
+            const batchResults = await Promise.all(batch.map(file => processFile(file)));
+            results.push(...batchResults);
+        }
+
         const validResults = results.filter(Boolean);
 
         const baseX = 100;
@@ -910,10 +947,20 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         const spacing = 20;
         const columns = 5;
 
+        // Calculate layout start position based on existing elements?
+        // For now, simpler to just start freshly or append. 
+        // Existing logic used `currentX/Y` but they were reset. 
+        // Let's stick to the grid logic but be aware it might overlap if we don't check existing.
+        // The original code reset variables, so I will too.
+
         let col = 0;
         let maxRowHeight = 0;
         let currentX = baseX;
         let currentY = baseY;
+
+        // If there are existing elements, try to start below them?
+        // But the user just wants them added. The visual pile-up is okay if consistent with previous behavior.
+        // Actually, let's just execute the placement logic.
 
         for (const data of validResults) {
             if (!data) continue;
@@ -935,9 +982,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 });
 
                 await elementRes.json();
-                // Element will be added via socket broadcast
 
-                // Prepare next position
                 col++;
                 maxRowHeight = Math.max(maxRowHeight, data.height);
 
@@ -1116,16 +1161,18 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     };
 
 
+    const visibleElements = useMemo(() => {
+        return elements.filter(el => {
+            if (ratingFilter === 0) return true;
+            if (el.type !== 'image' && el.type !== 'video') return true;
+            return (el.rating || 0) >= ratingFilter;
+        });
+    }, [elements, ratingFilter]);
+
     const handleUpdateStyle = (id: string, style: Partial<Element>) => {
         saveToHistory();
         setElements(prev => prev.map(el => (el.id === id ? { ...el, ...style } : el)));
         if (socket) socket.emit('element:update', { id, ...style });
-    };
-
-    // Local-only video control (no socket sync)
-    const handleLocalVideoControl = (id: string, style: Partial<Element>) => {
-        setElements(prev => prev.map(el => (el.id === id ? { ...el, ...style } : el)));
-        // NO socket emit, NO history save - purely local playback state
     };
 
     const handleDownload = async () => {
@@ -1306,7 +1353,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 onAddArrow={handleAddArrow}
                 onAddMedia={() => fileInputRef.current?.click()}
                 onUpdateStyle={handleUpdateStyle}
-                onLocalVideoControl={handleLocalVideoControl}
                 onReorder={handleReorder}
                 onDelete={handleDeleteElements}
                 onDownload={handleDownload}
@@ -1428,203 +1474,30 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             >
                 <Layer>
                     {renderGrid()}
-                    {elements.filter(el => {
-                        if (ratingFilter === 0) return true;
-                        if (el.type !== 'image' && el.type !== 'video') return true;
-                        return (el.rating || 0) >= ratingFilter;
-                    }).map((el: Element) => {
-                        const isSelected = selectedIds.includes(el.id);
-
-                        // Attach ref
-                        const attachRef = (node: Konva.Node | null) => {
-                            if (elementRefs.current) {
-                                if (node) elementRefs.current[el.id] = node;
-                                else delete elementRefs.current[el.id];
-                            }
-                        };
-
-                        if (el.type === 'rect') {
-                            return (
-                                <Rect
-                                    key={el.id}
-                                    ref={attachRef}
-                                    x={el.x}
-                                    y={el.y}
-                                    width={el.width}
-                                    height={el.height}
-                                    fill={el.fill || 'transparent'}
-                                    stroke={el.stroke || 'white'}
-                                    strokeWidth={el.strokeWidth || 1}
-                                    draggable={!editingId}
-                                    onClick={(e) => {
-                                        e.cancelBubble = true;
-                                        if (e.evt.ctrlKey) {
-                                            if (isSelected) {
-                                                setSelectedIds(prev => prev.filter(id => id !== el.id));
-                                            } else {
-                                                setSelectedIds(prev => [...prev, el.id]);
-                                            }
-                                        } else {
-                                            setSelectedIds([el.id]);
-                                        }
-                                    }}
-                                    onDragStart={handleDragStart}
-                                    onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => handleDragMove(e, el.id)}
-                                    onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => handleDragEnd(el.id, e.target.x(), e.target.y())}
-                                    onTransformEnd={(e: Konva.KonvaEventObject<Event>) => handleTransformEnd(el.id, e.target)}
-                                />
-                            );
-                        }
-
-                        if (el.type === 'text') {
-                            return (
-                                <Text
-                                    key={el.id}
-                                    ref={attachRef}
-                                    x={el.x}
-                                    y={el.y}
-                                    text={el.text}
-                                    fontSize={el.fontSize || 16}
-                                    fontStyle={el.fontStyle}
-                                    fill={el.fill || "white"}
-                                    draggable={!editingId}
-                                    onClick={(e) => {
-                                        e.cancelBubble = true;
-                                        if (e.evt.ctrlKey) {
-                                            if (isSelected) {
-                                                setSelectedIds(prev => prev.filter(id => id !== el.id));
-                                            } else {
-                                                setSelectedIds(prev => [...prev, el.id]);
-                                            }
-                                        } else {
-                                            setSelectedIds([el.id]);
-                                        }
-                                    }}
-                                    onDragStart={handleDragStart}
-                                    onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => handleDragMove(e, el.id)}
-                                    onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => handleDragEnd(el.id, e.target.x(), e.target.y())}
-                                    onDblClick={() => { setEditingId(el.id); setEditText(el.text || ''); }}
-                                    onTransformEnd={(e: Konva.KonvaEventObject<Event>) => handleTransformEnd(el.id, e.target)}
-                                />
-                            );
-                        }
-
-                        if (el.type === 'arrow') {
-                            const points = el.points || [];
-                            return (
-                                <React.Fragment key={el.id}>
-                                    <Arrow
-                                        ref={attachRef}
-                                        x={el.x}
-                                        y={el.y}
-                                        points={points}
-                                        stroke={isSelected ? '#3498db' : 'white'}
-                                        strokeWidth={el.strokeWidth || 5}
-                                        fill="white"
-                                        draggable={!editingId}
-                                        onClick={(e) => {
-                                            e.cancelBubble = true;
-                                            if (e.evt.ctrlKey) {
-                                                if (isSelected) {
-                                                    setSelectedIds(prev => prev.filter(id => id !== el.id));
-                                                } else {
-                                                    setSelectedIds(prev => [...prev, el.id]);
-                                                }
-                                            } else {
-                                                setSelectedIds([el.id]);
-                                            }
-                                        }}
-                                        onDragStart={handleDragStart}
-                                        onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => handleDragMove(e, el.id)}
-                                        onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => handleDragEnd(el.id, e.target.x(), e.target.y())}
-                                        onTransformEnd={(e: Konva.KonvaEventObject<Event>) => handleTransformEnd(el.id, e.target)}
-                                    />
-                                    {isSelected && points.length >= 4 && (
-                                        <>
-                                            <Circle
-                                                x={el.x + points[0]}
-                                                y={el.y + points[1]}
-                                                radius={6}
-                                                fill="#3498db"
-                                                stroke="white"
-                                                strokeWidth={2}
-                                                draggable
-                                                onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => {
-                                                    handleArrowPointDrag(el.id, 0, e.target.x(), e.target.y());
-                                                }}
-                                                onDragEnd={() => handleArrowPointDragEnd(el.id)}
-                                            />
-                                            <Circle
-                                                x={el.x + points[points.length - 2]}
-                                                y={el.y + points[points.length - 1]}
-                                                radius={6}
-                                                fill="#3498db"
-                                                stroke="white"
-                                                strokeWidth={2}
-                                                draggable
-                                                onDragMove={(e: Konva.KonvaEventObject<DragEvent>) => {
-                                                    handleArrowPointDrag(el.id, (points.length / 2) - 1, e.target.x(), e.target.y());
-                                                }}
-                                                onDragEnd={() => handleArrowPointDragEnd(el.id)}
-                                            />
-                                        </>
-                                    )}
-                                </React.Fragment>
-                            );
-                        }
-
-                        if (el.type === 'image' || el.type === 'video') {
-                            return (
-                                <MultimediaElement
-                                    key={el.id}
-                                    ref={attachRef}
-                                    id={el.id}
-                                    type={el.type as 'image' | 'video'}
-                                    x={el.x}
-                                    y={el.y}
-                                    width={el.width}
-                                    height={el.height}
-                                    url={el.url || ''}
-                                    isSelected={isSelected}
-                                    draggable={!editingId}
-                                    onClick={(e: Konva.KonvaEventObject<MouseEvent>) => {
-                                        e.cancelBubble = true;
-                                        if (e.evt.ctrlKey) {
-                                            if (isSelected) {
-                                                setSelectedIds(prev => prev.filter(id => id !== el.id));
-                                            } else {
-                                                setSelectedIds(prev => [...prev, el.id]);
-                                            }
-                                        } else {
-                                            if (el.type === 'video') {
-                                                handleLocalVideoControl(el.id, { isPlaying: !el.isPlaying });
-                                            }
-                                            setSelectedIds([el.id]);
-                                        }
-                                    }}
-                                    onDragEnd={(e: Konva.KonvaEventObject<DragEvent>) => handleDragEnd(el.id, e.target.x(), e.target.y())}
-                                    onTransformEnd={(e: Konva.KonvaEventObject<Event>) => handleTransformEnd(el.id, e.target)}
-                                    isPlaying={el.isPlaying}
-                                    isMuted={el.isMuted}
-                                    rating={el.rating}
-                                    onUpdateElement={handleUpdateStyle}
-                                    onContextMenu={(e: Konva.KonvaEventObject<PointerEvent>) => {
-                                        e.evt.preventDefault();
-                                        const stage = e.target.getStage();
-                                        if (!stage) return;
-                                        const pos = stage.getPointerPosition();
-                                        if (!pos) return;
-                                        setContextMenu({
-                                            x: pos.x,
-                                            y: pos.y,
-                                            elementId: el.id
-                                        });
-                                    }}
-                                />
-                            );
-                        }
-                        return null;
-                    })}
+                    {visibleElements.map((el: Element) => (
+                        <CanvasItem
+                            key={el.id}
+                            element={el}
+                            isSelected={selectedIds.includes(el.id)}
+                            isEditing={editingId === el.id}
+                            onRef={(node) => {
+                                if (elementRefs.current) {
+                                    if (node) elementRefs.current[el.id] = node;
+                                    else delete elementRefs.current[el.id];
+                                }
+                            }}
+                            onDragStart={handleDragStart}
+                            onDragMove={handleDragMove}
+                            onDragEnd={handleDragEnd}
+                            onTransformEnd={handleTransformEnd}
+                            onClick={handleElementClick}
+                            onDblClick={handleDblClick}
+                            onArrowPointDrag={handleArrowPointDrag}
+                            onArrowPointDragEnd={handleArrowPointDragEnd}
+                            onUpdateElement={handleUpdateStyle}
+                            onContextMenu={handleContextMenu}
+                        />
+                    ))}
 
                     {selectionBox && (
                         <Rect
