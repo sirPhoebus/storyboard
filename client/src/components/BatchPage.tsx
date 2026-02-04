@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { Socket } from 'socket.io-client';
 import { API_BASE_URL } from '../config';
 import type { BatchTask } from '../types';
-import { Socket } from 'socket.io-client';
-import { Play, Trash2, Volume2, VolumeX, Clock, ChevronLeft, Hourglass, Download, ChevronRight } from 'lucide-react';
+import { Play, Trash2, Volume2, VolumeX, ChevronLeft, Hourglass, Download, ChevronRight } from 'lucide-react';
 
 interface PromptMove {
     id: string;
@@ -77,6 +77,9 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
     }, [socket]);
 
     const handleUpdateTask = (id: string, updates: Partial<BatchTask>) => {
+        // Optimistic update
+        setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
+
         fetch(`${API_BASE_URL}/api/batch/tasks/${id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
@@ -125,21 +128,23 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                             <p style={{ color: '#666', fontSize: '16px' }}>No batch tasks yet. Right-click images on the canvas to add frames.</p>
                         </div>
                     ) : tasks.map(task => (
-                        <div key={task.id} style={{
-                            background: 'rgba(255,255,255,0.03)',
-                            border: '1px solid rgba(255,255,255,0.08)',
-                            borderRadius: '20px',
-                            padding: '24px',
-                            display: 'grid',
-                            gridTemplateColumns: 'min-content 1fr min-content',
-                            gap: '24px',
-                            alignItems: 'center',
-                            transition: 'transform 0.2s, background 0.2s'
-                        }}>
+                        <div key={task.id}
+                            onClick={() => setSelectedTaskId(task.id)}
+                            style={{
+                                background: selectedTaskId === task.id ? 'rgba(52, 152, 219, 0.05)' : 'rgba(255,255,255,0.03)',
+                                border: `1px solid ${selectedTaskId === task.id ? 'rgba(52, 152, 219, 0.3)' : 'rgba(255,255,255,0.08)'}`,
+                                borderRadius: '20px',
+                                padding: '24px',
+                                display: 'grid',
+                                gridTemplateColumns: 'min-content 1fr min-content',
+                                gap: '24px',
+                                alignItems: 'start',
+                                transition: 'all 0.2s'
+                            }}>
                             {/* Frame Pair or Video Result */}
                             <div style={{ display: 'flex', gap: '12px', background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '16px' }}>
                                 {task.generated_video_url && task.status === 'completed' ? (
-                                    <div style={{ width: '252px', height: '80px', borderRadius: '8px', overflow: 'hidden', background: '#000', border: '2px solid #3498db', position: 'relative' }}>
+                                    <div style={{ width: '252px', height: '140px', borderRadius: '8px', overflow: 'hidden', background: '#000', border: '2px solid #3498db', position: 'relative' }}>
                                         <video
                                             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                                             controls
@@ -150,110 +155,195 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                         </video>
                                     </div>
                                 ) : (
-                                    <>
-                                        <div style={{ width: '120px', height: '80px', borderRadius: '8px', overflow: 'hidden', background: '#222', border: '1px solid rgba(255,255,255,0.05)', position: 'relative' }}>
-                                            {task.first_frame_url ? (
-                                                <img src={`${task.first_frame_url.startsWith('http') ? '' : API_BASE_URL}${task.first_frame_url}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="First frame" />
-                                            ) : (
-                                                <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#444' }}>FIRST FRAME</div>
-                                            )}
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            <div style={{ width: '120px', height: '70px', borderRadius: '8px', overflow: 'hidden', background: '#222', border: '1px solid rgba(255,255,255,0.05)', position: 'relative' }}>
+                                                {task.first_frame_url ? (
+                                                    <img src={`${task.first_frame_url.startsWith('http') ? '' : API_BASE_URL}${task.first_frame_url}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="First frame" />
+                                                ) : (
+                                                    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#444' }}>FIRST FRAME</div>
+                                                )}
+                                            </div>
+                                            <div style={{ width: '120px', height: '70px', borderRadius: '8px', overflow: 'hidden', background: '#222', border: '1px solid rgba(255,255,255,0.05)', position: 'relative' }}>
+                                                {task.last_frame_url ? (
+                                                    <img src={`${task.last_frame_url.startsWith('http') ? '' : API_BASE_URL}${task.last_frame_url}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="Last frame" />
+                                                ) : (
+                                                    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#444' }}>LAST FRAME</div>
+                                                )}
+                                            </div>
                                         </div>
-                                        <div style={{ width: '120px', height: '80px', borderRadius: '8px', overflow: 'hidden', background: '#222', border: '1px solid rgba(255,255,255,0.05)', position: 'relative' }}>
-                                            {task.last_frame_url ? (
-                                                <img src={`${task.last_frame_url.startsWith('http') ? '' : API_BASE_URL}${task.last_frame_url}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="Last frame" />
-                                            ) : (
-                                                <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#444' }}>LAST FRAME</div>
-                                            )}
+                                        <div style={{
+                                            fontSize: '11px',
+                                            color: '#666',
+                                            textAlign: 'center',
+                                            textTransform: 'uppercase',
+                                            fontWeight: 600,
+                                            letterSpacing: '0.5px'
+                                        }}>
+                                            {task.aspect_ratio || '16:9'}
                                         </div>
-                                    </>
+                                    </div>
                                 )}
                             </div>
 
                             {/* Controls */}
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                                <textarea
-                                    value={task.prompt || ''}
-                                    onChange={(e) => handleUpdateTask(task.id, { prompt: e.target.value })}
-                                    onFocus={() => setSelectedTaskId(task.id)}
-                                    placeholder="Enter generation prompt..."
-                                    style={{
-                                        width: '100%',
-                                        background: 'rgba(0,0,0,0.2)',
-                                        border: `1px solid ${selectedTaskId === task.id ? '#3498db' : 'rgba(255,255,255,0.1)'}`,
-                                        borderRadius: '12px',
-                                        padding: '12px',
-                                        color: 'white',
-                                        fontFamily: 'inherit',
-                                        fontSize: '14px',
-                                        resize: 'none',
-                                        height: '60px'
-                                    }}
-                                />
-                                <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                                    <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '4px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                                        {[5, 10].map(d => (
-                                            <button
-                                                key={d}
-                                                onClick={() => handleUpdateTask(task.id, { duration: d })}
-                                                style={{
-                                                    padding: '6px 12px',
-                                                    borderRadius: '8px',
-                                                    border: 'none',
-                                                    background: task.duration === d ? '#3498db' : 'transparent',
-                                                    color: task.duration === d ? 'white' : '#888',
-                                                    fontSize: '12px',
-                                                    fontWeight: 600,
-                                                    cursor: 'pointer',
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    gap: '4px'
-                                                }}
-                                            >
-                                                <Clock size={12} />
-                                                {d}s
-                                            </button>
-                                        ))}
+                                <div style={{ display: 'flex', gap: '16px' }}>
+                                    <div style={{ flex: 1 }}>
+                                        <label style={{ display: 'block', fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: 600, textTransform: 'uppercase' }}>Positive Prompt</label>
+                                        <textarea
+                                            value={task.prompt || ''}
+                                            onChange={(e) => handleUpdateTask(task.id, { prompt: e.target.value })}
+                                            placeholder="Describe the motion..."
+                                            style={{
+                                                width: '100%',
+                                                background: 'rgba(0,0,0,0.2)',
+                                                border: '1px solid rgba(255,255,255,0.1)',
+                                                borderRadius: '8px',
+                                                padding: '12px',
+                                                color: 'white',
+                                                fontFamily: 'inherit',
+                                                fontSize: '13px',
+                                                resize: 'none',
+                                                height: '60px',
+                                                outline: 'none'
+                                            }}
+                                        />
                                     </div>
-                                    <button
-                                        onClick={() => handleUpdateTask(task.id, { audio_enabled: !task.audio_enabled })}
-                                        style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: '8px',
-                                            background: task.audio_enabled ? 'rgba(52, 152, 219, 0.1)' : 'rgba(255,255,255,0.02)',
-                                            border: '1px solid',
-                                            borderColor: task.audio_enabled ? '#3498db' : 'rgba(255,255,255,0.1)',
-                                            borderRadius: '10px',
-                                            padding: '8px 12px',
-                                            color: task.audio_enabled ? '#3498db' : '#888',
-                                            fontSize: '12px',
-                                            fontWeight: 600,
-                                            cursor: 'pointer'
-                                        }}
-                                    >
-                                        {task.audio_enabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
-                                        Audio {task.audio_enabled ? 'ON' : 'OFF'}
-                                    </button>
-                                    <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '4px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                                        {['16:9', '9:16', '1:1', '21:9'].map(ar => (
-                                            <button
-                                                key={ar}
-                                                onClick={() => handleUpdateTask(task.id, { aspect_ratio: ar as BatchTask['aspect_ratio'] })}
-                                                style={{
-                                                    padding: '6px 12px',
-                                                    borderRadius: '8px',
-                                                    border: 'none',
-                                                    background: task.aspect_ratio === ar ? '#3498db' : 'transparent',
-                                                    color: task.aspect_ratio === ar ? 'white' : '#888',
-                                                    fontSize: '11px',
-                                                    fontWeight: 600,
-                                                    cursor: 'pointer'
-                                                }}
-                                            >
-                                                {ar}
-                                            </button>
-                                        ))}
+                                    <div style={{ flex: 1 }}>
+                                        <label style={{ display: 'block', fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: 600, textTransform: 'uppercase' }}>Negative Prompt</label>
+                                        <textarea
+                                            value={task.negative_prompt || ''}
+                                            onChange={(e) => handleUpdateTask(task.id, { negative_prompt: e.target.value })}
+                                            placeholder="Things to avoid..."
+                                            style={{
+                                                width: '100%',
+                                                background: 'rgba(0,0,0,0.2)',
+                                                border: '1px solid rgba(255,255,255,0.1)',
+                                                borderRadius: '8px',
+                                                padding: '12px',
+                                                color: 'white',
+                                                fontFamily: 'inherit',
+                                                fontSize: '13px',
+                                                resize: 'none',
+                                                height: '60px',
+                                                outline: 'none'
+                                            }}
+                                        />
                                     </div>
+                                </div>
+
+                                <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                        <label style={{ fontSize: '10px', color: '#666', fontWeight: 600, textTransform: 'uppercase' }}>Model</label>
+                                        <select
+                                            value={task.model_name || 'kling-v1'}
+                                            onChange={(e) => handleUpdateTask(task.id, { model_name: e.target.value })}
+                                            style={{
+                                                background: '#1a1a1a',
+                                                border: '1px solid rgba(255,255,255,0.1)',
+                                                borderRadius: '6px',
+                                                padding: '4px 8px',
+                                                color: 'white',
+                                                fontSize: '12px',
+                                                outline: 'none'
+                                            }}
+                                        >
+                                            <option value="kling-v1">v1.0</option>
+                                            <option value="kling-v1-5">v1.5</option>
+                                            <option value="kling-v1-6">v1.6</option>
+                                            <option value="kling-v2-1">v2.1 (NEW)</option>
+                                            <option value="kling-v2-5-turbo">v2.5 Turbo</option>
+                                            <option value="kling-v2-6">v2.6</option>
+                                        </select>
+                                    </div>
+
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                        <label style={{ fontSize: '10px', color: '#666', fontWeight: 600, textTransform: 'uppercase' }}>Mode</label>
+                                        <select
+                                            value={task.mode || 'std'}
+                                            onChange={(e) => handleUpdateTask(task.id, { mode: e.target.value as any })}
+                                            style={{
+                                                background: '#1a1a1a',
+                                                border: '1px solid rgba(255,255,255,0.1)',
+                                                borderRadius: '6px',
+                                                padding: '4px 8px',
+                                                color: 'white',
+                                                fontSize: '12px',
+                                                outline: 'none'
+                                            }}
+                                        >
+                                            <option value="std">Standard</option>
+                                            <option value="pro">Pro</option>
+                                        </select>
+                                    </div>
+
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                        <label style={{ fontSize: '10px', color: '#666', fontWeight: 600, textTransform: 'uppercase' }}>Duration</label>
+                                        <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                                            {[5, 10].map(d => (
+                                                <button
+                                                    key={d}
+                                                    onClick={(e) => { e.stopPropagation(); handleUpdateTask(task.id, { duration: d as any }); }}
+                                                    style={{
+                                                        padding: '4px 8px',
+                                                        borderRadius: '4px',
+                                                        border: 'none',
+                                                        background: task.duration === d ? '#3498db' : 'transparent',
+                                                        color: task.duration === d ? 'white' : '#888',
+                                                        fontSize: '12px',
+                                                        fontWeight: 600,
+                                                        cursor: 'pointer',
+                                                    }}
+                                                >
+                                                    {d}s
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                        <label style={{ fontSize: '10px', color: '#666', fontWeight: 600, textTransform: 'uppercase' }}>Audio</label>
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); handleUpdateTask(task.id, { audio_enabled: !task.audio_enabled }); }}
+                                            style={{
+                                                display: 'flex',
+                                                alignItems: 'center',
+                                                gap: '6px',
+                                                background: task.audio_enabled ? 'rgba(52, 152, 219, 0.1)' : 'rgba(255,255,255,0.02)',
+                                                border: '1px solid',
+                                                borderColor: task.audio_enabled ? '#3498db' : 'rgba(255,255,255,0.1)',
+                                                borderRadius: '6px',
+                                                padding: '4px 8px',
+                                                color: task.audio_enabled ? '#3498db' : '#888',
+                                                fontSize: '12px',
+                                                fontWeight: 600,
+                                                cursor: 'pointer',
+                                                height: '26px'
+                                            }}
+                                        >
+                                            {task.audio_enabled ? <Volume2 size={12} /> : <VolumeX size={12} />}
+                                            {task.audio_enabled ? 'ON' : 'OFF'}
+                                        </button>
+                                    </div>
+
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '100px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                            <label style={{ fontSize: '10px', color: '#666', fontWeight: 600, textTransform: 'uppercase' }}>CFG Scale</label>
+                                            <span style={{ fontSize: '10px', color: '#888' }}>{task.cfg_scale || 0.5}</span>
+                                        </div>
+                                        <input
+                                            type="range"
+                                            min="0"
+                                            max="1"
+                                            step="0.1"
+                                            value={task.cfg_scale || 0.5}
+                                            onClick={(e) => e.stopPropagation()}
+                                            onChange={(e) => handleUpdateTask(task.id, { cfg_scale: parseFloat(e.target.value) })}
+                                            style={{ width: '100%', height: '4px', borderRadius: '2px', accentColor: '#3498db', cursor: 'pointer' }}
+                                        />
+                                    </div>
+
                                     <div style={{
                                         marginLeft: 'auto',
                                         fontSize: '11px',
@@ -286,12 +376,13 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                         onMouseOver={(e) => (e.currentTarget.style.color = '#3498db')}
                                         onMouseOut={(e) => (e.currentTarget.style.color = '#666')}
                                         title="Download video"
+                                        onClick={(e) => e.stopPropagation()}
                                     >
                                         <Download size={24} />
                                     </a>
                                 )}
                                 <button
-                                    onClick={() => handleDeleteTask(task.id)}
+                                    onClick={(e) => { e.stopPropagation(); handleDeleteTask(task.id); }}
                                     style={{ background: 'transparent', border: 'none', color: '#666', cursor: 'pointer', padding: '10px', borderRadius: '12px', transition: 'all 0.2s' }}
                                     onMouseOver={(e) => (e.currentTarget.style.color = '#e74c3c')}
                                     onMouseOut={(e) => (e.currentTarget.style.color = '#666')}

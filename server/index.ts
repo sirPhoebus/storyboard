@@ -8,7 +8,7 @@ import multer from 'multer';
 import path from 'path';
 import crypto from 'crypto';
 import archiver from 'archiver';
-import { KlingService } from './services/klingService';
+import { KlingService, KlingImageToVideoService } from './services/klingService';
 import getVideoDimensions from 'get-video-dimensions';
 
 const dataDir = process.env.DATA_DIR || process.cwd();
@@ -539,9 +539,46 @@ app.post('/api/pages/:id/move-project', (req: any, res: any) => {
 
 // Helper to resolve file path from URL
 const getFilePathFromUrl = (url: string) => {
-    // Remove leading /uploads/ to get relative path (e.g., 'projectId/file.png' or 'file.png')
-    const relativePath = url.replace(/^\/uploads\//, '');
-    return path.join(uploadsDir, relativePath);
+    try {
+        let decodedUrl = decodeURIComponent(url);
+
+        // Handle full URLs by stripping protocol/domain if present
+        if (decodedUrl.startsWith('http')) {
+            try {
+                const urlObj = new URL(decodedUrl);
+                decodedUrl = urlObj.pathname;
+            } catch (e) {
+                // Keep original if URL parsing fails
+            }
+        }
+
+        // Normalize slashes
+        decodedUrl = decodedUrl.replace(/\\/g, '/');
+
+        // improved stripping of /uploads/ prefix or finding it in the path
+        const uploadsMarker = '/uploads/';
+        const index = decodedUrl.indexOf(uploadsMarker);
+
+        let relativePath = '';
+        if (index !== -1) {
+            // Take everything after /uploads/
+            relativePath = decodedUrl.substring(index + uploadsMarker.length);
+        } else if (decodedUrl.startsWith('uploads/')) {
+            relativePath = decodedUrl.substring(8);
+        } else {
+            // If just a filename or path without uploads prefix, assume relative
+            relativePath = decodedUrl;
+        }
+
+        // Strip leading slashes to avoid absolute path behavior in path.join
+        relativePath = relativePath.replace(/^[\/\\]+/, '');
+
+        // 4. Join with the absolute uploadsDir
+        return path.join(uploadsDir, relativePath);
+    } catch (err) {
+        console.error('Error resolving path from URL:', url, err);
+        return '';
+    }
 };
 
 const hardDeleteAssets = (ids: string[]) => {
@@ -660,8 +697,11 @@ app.post('/api/download-zip', (req: any, res: any) => {
         return res.status(400).json({ error: 'elementIds array required' });
     }
 
+    console.log(`📦 [Download] Request for ${elementIds.length} elements`);
+
     try {
         const elements = db.prepare(`SELECT * FROM elements WHERE id IN (${elementIds.map(() => '?').join(',')})`).all(...elementIds) as any[];
+        console.log(`📦 [Download] Found ${elements.length} elements in DB`);
 
         const archive = archiver('zip', {
             zlib: { level: 9 }
@@ -670,21 +710,43 @@ app.post('/api/download-zip', (req: any, res: any) => {
         res.attachment('assets.zip');
         archive.pipe(res);
 
-        elements.forEach(el => {
-            const content = JSON.parse(el.content);
-            if (content.url) {
-                const filePath = getFilePathFromUrl(content.url);
-                const fileName = path.basename(content.url);
+        let addedCount = 0;
+        let missedCount = 0;
+        const missingFiles: string[] = [];
 
-                if (fs.existsSync(filePath)) {
-                    archive.file(filePath, { name: fileName });
+        elements.forEach(el => {
+            try {
+                const content = JSON.parse(el.content);
+                if (content.url) {
+                    const filePath = getFilePathFromUrl(content.url);
+                    const fileName = path.basename(content.url);
+
+                    if (filePath && fs.existsSync(filePath)) {
+                        archive.file(filePath, { name: fileName });
+                        addedCount++;
+                    } else {
+                        console.warn(`⚠️ [Download] File missing for element ${el.id}: ${filePath} (URL: ${content.url})`);
+                        missedCount++;
+                        missingFiles.push(`Element ID: ${el.id}\nOriginal URL: ${content.url}\nResolved Path: ${filePath}\nComputed Uploads Dir: ${uploadsDir}\n`);
+                    }
                 }
+            } catch (parseErr) {
+                console.error(`❌ [Download] Error parsing content for element ${el.id}:`, parseErr);
+                missingFiles.push(`Element ID: ${el.id} - content parse error`);
             }
         });
 
+        if (missedCount > 0) {
+            archive.append(missingFiles.join('\n\n-------------------\n\n'), { name: 'MISSING_FILES_REPORT.txt' });
+        }
+
+        console.log(`✅ [Download] Finalizing zip. Added: ${addedCount}, Missed: ${missedCount}`);
         archive.finalize();
     } catch (err: any) {
-        res.status(500).json({ error: err.message });
+        console.error('❌ [Download] Error generating zip:', err);
+        if (!res.headersSent) {
+            res.status(500).json({ error: err.message });
+        }
     }
 });
 
@@ -895,7 +957,7 @@ app.post('/api/batch/add-frame', (req: any, res: any) => {
 });
 
 app.patch('/api/batch/tasks/:id', (req: any, res: any) => {
-    const { prompt, duration, audio_enabled, aspect_ratio, status } = req.body;
+    const { prompt, duration, audio_enabled, aspect_ratio, status, model_name, mode, cfg_scale, negative_prompt } = req.body;
     const updates: string[] = [];
     const values: any[] = [];
 
@@ -904,6 +966,10 @@ app.patch('/api/batch/tasks/:id', (req: any, res: any) => {
     if (audio_enabled !== undefined) { updates.push('audio_enabled = ?'); values.push(audio_enabled ? 1 : 0); }
     if (aspect_ratio !== undefined) { updates.push('aspect_ratio = ?'); values.push(aspect_ratio); }
     if (status !== undefined) { updates.push('status = ?'); values.push(status); }
+    if (model_name !== undefined) { updates.push('model_name = ?'); values.push(model_name); }
+    if (mode !== undefined) { updates.push('mode = ?'); values.push(mode); }
+    if (cfg_scale !== undefined) { updates.push('cfg_scale = ?'); values.push(cfg_scale); }
+    if (negative_prompt !== undefined) { updates.push('negative_prompt = ?'); values.push(negative_prompt); }
 
     if (updates.length === 0) return res.status(400).json({ error: 'No fields to update' });
 
@@ -940,10 +1006,19 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
     if (tasks.length === 0) return res.status(400).json({ error: 'No pending tasks with at least one frame' });
 
     const klingApiKey = process.env.KLING_API_KEY;
-    if (!klingApiKey) {
-        console.error('❌ KLING_API_KEY is not set in environment variables');
-        return res.status(500).json({ error: 'Server configuration error: KLING_API_KEY missing' });
+    const klingAccessKey = process.env.KLING_ACCESS_KEY;
+    const klingSecretKey = process.env.KLING_SECRET_KEY;
+
+    if (!klingApiKey && (!klingAccessKey || !klingSecretKey)) {
+        console.error('❌ Missing Kling credentials (API Key or Access/Secret keys)');
+        return res.status(500).json({ error: 'Server configuration error: Kling credentials missing' });
     }
+
+    const klingConfig = {
+        ...(klingApiKey ? { klingApiKey } : {}),
+        ...(klingAccessKey ? { klingAccessKey } : {}),
+        ...(klingSecretKey ? { klingSecretKey } : {})
+    };
 
     res.json({ success: true, count: tasks.length });
 
@@ -952,13 +1027,45 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
         try {
             console.log(`🚀 [Kling] Starting generation for task ${task.id}...`);
 
-            await KlingService.generateVideo(
-                { klingApiKey },
-                task.first_frame_url || task.last_frame_url, // Kling supports single frame or pair
-                task.prompt || "Cinematic high quality video",
-                task.duration === 10 ? '10' : '5',
-                !!task.audio_enabled,
-                task.aspect_ratio || "16:9",
+            // URL Resilience: Convert local/railway URLs to full public URLs if possible, or pass as is
+            const getPublicUrl = (localUrl: string) => {
+                if (!localUrl) return undefined;
+                if (localUrl.startsWith('http')) return localUrl; // Already absolute
+
+                const baseUrl = process.env.STORYBOARD_BASE_URL;
+                if (!baseUrl) {
+                    console.warn('⚠️ STORYBOARD_BASE_URL not set, passing relative URL to API might fail');
+                    return localUrl;
+                }
+                const cleanPath = localUrl.startsWith('/') ? localUrl : `/${localUrl}`;
+                return `${baseUrl}${cleanPath}`;
+            };
+
+            const firstFrame = getPublicUrl(task.first_frame_url);
+            const lastFrame = getPublicUrl(task.last_frame_url);
+
+            if (!firstFrame) {
+                console.error(`❌ [Kling] Task ${task.id} missing start image URL, skipping`);
+                db.prepare('UPDATE batch_tasks SET status = ?, error = ? WHERE id = ?').run('failed', 'Missing first frame', task.id);
+                continue;
+            }
+
+            // Map DB fields to KlingTaskOptions
+            // Map DB fields to KlingTaskOptions - respecting exactOptionalPropertyTypes
+            const options = {
+                image: firstFrame, // Guaranteed string now
+                duration: (task.duration === 10 ? '10' : '5') as '5' | '10',
+                ...(task.prompt ? { prompt: task.prompt } : { prompt: "Cinematic high quality video" }),
+                ...(lastFrame ? { image_tail: lastFrame } : {}),
+                ...(task.mode ? { mode: task.mode as 'std' | 'pro' } : { mode: 'pro' as const }),
+                ...(task.model_name ? { model_name: task.model_name as string } : { model_name: 'kling-v1' }),
+                ...(task.cfg_scale ? { cfg_scale: Number(task.cfg_scale) } : { cfg_scale: 0.5 }),
+                ...(task.negative_prompt ? { negative_prompt: task.negative_prompt } : {})
+            };
+
+            await KlingImageToVideoService.generate(
+                klingConfig,
+                options,
                 async (status, videoUrl) => {
                     const updates: any = { status };
                     if (videoUrl) {

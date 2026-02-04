@@ -44,7 +44,11 @@ db.exec(`
     status TEXT DEFAULT 'pending',
     aspect_ratio TEXT DEFAULT '16:9',
     generated_video_url TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    model_name TEXT DEFAULT 'kling-v1',
+    mode TEXT DEFAULT 'std',
+    cfg_scale REAL DEFAULT 0.5,
+    negative_prompt TEXT
   );
 `);
 
@@ -59,6 +63,19 @@ try {
 } catch (e) {
   // Column already exists
 }
+
+try {
+  db.exec("ALTER TABLE batch_tasks ADD COLUMN model_name TEXT DEFAULT 'kling-v1'");
+} catch (e) { }
+try {
+  db.exec("ALTER TABLE batch_tasks ADD COLUMN mode TEXT DEFAULT 'std'");
+} catch (e) { }
+try {
+  db.exec("ALTER TABLE batch_tasks ADD COLUMN cfg_scale REAL DEFAULT 0.5");
+} catch (e) { }
+try {
+  db.exec("ALTER TABLE batch_tasks ADD COLUMN negative_prompt TEXT");
+} catch (e) { }
 
 try {
   db.exec('ALTER TABLE pages ADD COLUMN thumbnail TEXT');

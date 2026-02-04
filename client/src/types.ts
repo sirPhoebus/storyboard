@@ -61,4 +61,8 @@ export interface BatchTask {
     status: 'pending' | 'generating' | 'completed' | 'failed';
     generated_video_url?: string;
     created_at: string;
+    model_name: string;
+    mode: 'std' | 'pro';
+    cfg_scale: number;
+    negative_prompt?: string;
 }
