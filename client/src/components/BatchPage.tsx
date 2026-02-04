@@ -237,7 +237,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                         <label style={{ fontSize: '10px', color: '#666', fontWeight: 600, textTransform: 'uppercase' }}>Model</label>
                                         <select
-                                            value={task.model_name || 'kling-v1'}
+                                            value={task.model_name || 'kling-v2-6'}
                                             onChange={(e) => handleUpdateTask(task.id, { model_name: e.target.value })}
                                             style={{
                                                 background: '#1a1a1a',
@@ -252,16 +252,16 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                             <option value="kling-v1">v1.0</option>
                                             <option value="kling-v1-5">v1.5</option>
                                             <option value="kling-v1-6">v1.6</option>
-                                            <option value="kling-v2-1">v2.1 (NEW)</option>
+                                            <option value="kling-v2-1">v2.1</option>
                                             <option value="kling-v2-5-turbo">v2.5 Turbo</option>
-                                            <option value="kling-v2-6">v2.6</option>
+                                            <option value="kling-v2-6">v2.6 (NEW)</option>
                                         </select>
                                     </div>
 
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                         <label style={{ fontSize: '10px', color: '#666', fontWeight: 600, textTransform: 'uppercase' }}>Mode</label>
                                         <select
-                                            value={task.mode || 'std'}
+                                            value={task.mode || 'pro'}
                                             onChange={(e) => handleUpdateTask(task.id, { mode: e.target.value as any })}
                                             style={{
                                                 background: '#1a1a1a',
@@ -327,6 +327,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                         </button>
                                     </div>
 
+                                    {/* CFG Scale Hidden
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', width: '100px' }}>
                                         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                                             <label style={{ fontSize: '10px', color: '#666', fontWeight: 600, textTransform: 'uppercase' }}>CFG Scale</label>
@@ -343,6 +344,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                             style={{ width: '100%', height: '4px', borderRadius: '2px', accentColor: '#3498db', cursor: 'pointer' }}
                                         />
                                     </div>
+                                    */}
 
                                     <div style={{
                                         marginLeft: 'auto',

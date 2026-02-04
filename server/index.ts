@@ -936,7 +936,7 @@ app.post('/api/batch/add-frame', (req: any, res: any) => {
             res.json(updated);
         } else {
             // 2. Create a new row
-            db.prepare(`INSERT INTO batch_tasks (id, ${columnToFill}, aspect_ratio) VALUES (?, ?, ?)`).run(id, url, '16:9');
+            db.prepare(`INSERT INTO batch_tasks (id, ${columnToFill}, aspect_ratio, model_name, mode) VALUES (?, ?, ?, ?, ?)`).run(id, url, '16:9', 'kling-v2-6', 'pro');
             const newTask = {
                 id,
                 [columnToFill]: url,
@@ -945,6 +945,8 @@ app.post('/api/batch/add-frame', (req: any, res: any) => {
                 duration: 5,
                 audio_enabled: false,
                 aspect_ratio: '16:9',
+                model_name: 'kling-v2-6',
+                mode: 'pro',
                 status: 'pending',
                 created_at: new Date().toISOString()
             };

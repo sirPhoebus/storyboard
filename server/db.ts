@@ -65,10 +65,10 @@ try {
 }
 
 try {
-  db.exec("ALTER TABLE batch_tasks ADD COLUMN model_name TEXT DEFAULT 'kling-v1'");
+  db.exec("ALTER TABLE batch_tasks ADD COLUMN model_name TEXT DEFAULT 'kling-v2-6'");
 } catch (e) { }
 try {
-  db.exec("ALTER TABLE batch_tasks ADD COLUMN mode TEXT DEFAULT 'std'");
+  db.exec("ALTER TABLE batch_tasks ADD COLUMN mode TEXT DEFAULT 'pro'");
 } catch (e) { }
 try {
   db.exec("ALTER TABLE batch_tasks ADD COLUMN cfg_scale REAL DEFAULT 0.5");

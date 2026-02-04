@@ -758,7 +758,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             type: 'text',
             x: 100,
             y: 100,
-            fontSize: 16,
+            fontSize: 48,
             content: { text: 'Double click to edit' }
         };
         fetch(`${API_BASE_URL}/api/elements`, {
