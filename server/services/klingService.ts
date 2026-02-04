@@ -264,21 +264,23 @@ export class KlingImageToVideoService {
         if (params.negative_prompt) payload.negative_prompt = params.negative_prompt;
 
         const resolveUrl = (rawUrl: string): string => {
-            const baseUrl = process.env.STORYBOARD_BASE_URL;
-            if (!baseUrl || !rawUrl) return rawUrl;
+            if (!rawUrl) return rawUrl;
+            let finalUrl = rawUrl;
 
-            if (rawUrl.startsWith('http')) {
-                const isLocal = rawUrl.includes('localhost') || rawUrl.includes('127.0.0.1') || rawUrl.includes('railway.app');
-                if (isLocal) {
-                    try {
-                        const urlObj = new URL(rawUrl);
-                        return `${baseUrl}${urlObj.pathname}`;
-                    } catch { return rawUrl; }
-                }
-                return rawUrl;
+            // Handle relative URLs
+            if (!rawUrl.startsWith('http')) {
+                const baseUrl = process.env.STORYBOARD_BASE_URL;
+                if (!baseUrl) return rawUrl; // Can't resolve without base URL
+                const cleanPath = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
+                finalUrl = `${baseUrl}${cleanPath}`;
             }
-            const cleanPath = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
-            return `${baseUrl}${cleanPath}`;
+
+            // Force HTTPS for Railway
+            if (finalUrl.includes('.up.railway.app') && finalUrl.startsWith('http:')) {
+                finalUrl = finalUrl.replace('http:', 'https:');
+            }
+
+            return finalUrl;
         };
 
         if (params.image) payload.image = resolveUrl(params.image);

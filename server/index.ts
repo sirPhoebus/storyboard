@@ -1030,15 +1030,27 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
             // URL Resilience: Convert local/railway URLs to full public URLs if possible, or pass as is
             const getPublicUrl = (localUrl: string) => {
                 if (!localUrl) return undefined;
-                if (localUrl.startsWith('http')) return localUrl; // Already absolute
 
-                const baseUrl = process.env.STORYBOARD_BASE_URL;
-                if (!baseUrl) {
-                    console.warn('⚠️ STORYBOARD_BASE_URL not set, passing relative URL to API might fail');
-                    return localUrl;
+                let finalUrl = localUrl;
+
+                // If relative, prepend base URL
+                if (!localUrl.startsWith('http')) {
+                    const baseUrl = process.env.STORYBOARD_BASE_URL;
+                    if (!baseUrl) {
+                        console.warn('⚠️ STORYBOARD_BASE_URL not set, passing relative URL to API might fail');
+                        return localUrl;
+                    }
+                    const cleanPath = localUrl.startsWith('/') ? localUrl : `/${localUrl}`;
+                    finalUrl = `${baseUrl}${cleanPath}`;
                 }
-                const cleanPath = localUrl.startsWith('/') ? localUrl : `/${localUrl}`;
-                return `${baseUrl}${cleanPath}`;
+
+                // Force HTTPS for railway.app domains or if we are in production
+                if (finalUrl.includes('.up.railway.app') && finalUrl.startsWith('http:')) {
+                    console.log(`🔒 [Kling] Upgrading URL to HTTPS: ${finalUrl}`);
+                    finalUrl = finalUrl.replace('http:', 'https:');
+                }
+
+                return finalUrl;
             };
 
             const firstFrame = getPublicUrl(task.first_frame_url);
