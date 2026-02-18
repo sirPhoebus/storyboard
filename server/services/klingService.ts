@@ -263,28 +263,52 @@ export class KlingImageToVideoService {
         if (params.cfg_scale) payload.cfg_scale = params.cfg_scale;
         if (params.negative_prompt) payload.negative_prompt = params.negative_prompt;
 
-        const resolveUrl = (rawUrl: string): string => {
+        const resolveImage = async (rawUrl: string): Promise<string> => {
             if (!rawUrl) return rawUrl;
-            let finalUrl = rawUrl;
+            
+            // 1. If it's already a full URL, return it
+            if (rawUrl.startsWith('http')) {
+                let finalUrl = rawUrl;
+                 // Force HTTPS for Railway
+                if (finalUrl.includes('.up.railway.app') && finalUrl.startsWith('http:')) {
+                    finalUrl = finalUrl.replace('http:', 'https:');
+                }
+                return finalUrl;
+            }
 
-            // Handle relative URLs
-            if (!rawUrl.startsWith('http')) {
-                const baseUrl = process.env.STORYBOARD_BASE_URL;
-                if (!baseUrl) return rawUrl; // Can't resolve without base URL
+            // 2. Try to construct absolute URL if BASE_URL is set
+            const baseUrl = process.env.STORYBOARD_BASE_URL;
+            if (baseUrl) {
                 const cleanPath = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
-                finalUrl = `${baseUrl}${cleanPath}`;
+                return `${baseUrl}${cleanPath}`;
             }
 
-            // Force HTTPS for Railway
-            if (finalUrl.includes('.up.railway.app') && finalUrl.startsWith('http:')) {
-                finalUrl = finalUrl.replace('http:', 'https:');
-            }
+            // 3. Fallback: Convert to Base64
+            console.warn(`⚠️ STORYBOARD_BASE_URL not set for relative path ${rawUrl}, attempting Base64 conversion...`);
+            
+            try {
+                const dataDir = process.env.DATA_DIR || process.cwd();
+                // Remove leading slash to join correctly
+                const relativePath = rawUrl.startsWith('/') ? rawUrl.slice(1) : rawUrl;
+                const localPath = path.join(dataDir, relativePath);
 
-            return finalUrl;
+                if (fs.existsSync(localPath)) {
+                    const fileBuffer = await fs.promises.readFile(localPath);
+                    const base64Image = fileBuffer.toString('base64');
+                    console.log(`✓ Converted image to Base64 (${base64Image.length} chars)`);
+                    return base64Image;
+                } else {
+                    console.error(`❌ Local file not found at ${localPath}`);
+                    return rawUrl;
+                }
+            } catch (err) {
+                console.error(`❌ Failed to convert to Base64: ${err}`);
+                return rawUrl;
+            }
         };
 
-        if (params.image) payload.image = resolveUrl(params.image);
-        if (params.image_tail) payload.image_tail = resolveUrl(params.image_tail);
+        if (params.image) payload.image = await resolveImage(params.image);
+        if (params.image_tail) payload.image_tail = await resolveImage(params.image_tail);
 
         console.log(`📡 [Kling I2V] Creating task`, JSON.stringify(payload, null, 2));
 
