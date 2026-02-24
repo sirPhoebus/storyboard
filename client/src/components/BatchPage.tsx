@@ -25,6 +25,9 @@ type PromptFocusTarget =
     | { type: 'task_prompt'; taskId: string }
     | { type: 'multi_prompt_item'; taskId: string; index: number };
 
+const MAX_MULTI_PROMPT_IMAGES = 3;
+const MAX_MULTI_PROMPT_SHOTS = 6;
+
 const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
     const [tasks, setTasks] = useState<BatchTask[]>([]);
     const [loading, setLoading] = useState(true);
@@ -138,8 +141,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
         if (!items[index]) return;
         items[index] = { ...items[index], ...updates };
         handleUpdateTask(task.id, {
-            multi_prompt_items: items,
-            middle_frame_urls: items.map((item) => item.url)
+            multi_prompt_items: items
         });
     };
 
@@ -147,14 +149,28 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
         const items = [...(task.multi_prompt_items || [])];
         items.splice(index, 1);
         handleUpdateTask(task.id, {
-            multi_prompt_items: items,
-            middle_frame_urls: items.map((item) => item.url)
+            multi_prompt_items: items
         });
+    };
+
+    const addMultiPromptItem = (task: BatchTask) => {
+        const items = [...(task.multi_prompt_items || [])];
+        if (items.length >= MAX_MULTI_PROMPT_SHOTS) {
+            alert(`Kling multi_prompt supports a maximum of ${MAX_MULTI_PROMPT_SHOTS} prompts.`);
+            return;
+        }
+        items.push({ prompt: '', duration: '' });
+        handleUpdateTask(task.id, { multi_prompt_items: items });
+    };
+
+    const removeMiddleImage = (task: BatchTask, index: number) => {
+        const urls = [...(task.middle_frame_urls || [])];
+        urls.splice(index, 1);
+        handleUpdateTask(task.id, { middle_frame_urls: urls });
     };
 
     const handleUploadMiddleImages = async (taskId: string, files: FileList | null) => {
         if (!files || files.length === 0) return;
-        const maxItems = 3;
 
         const task = tasks.find(t => t.id === taskId);
         if (!task) return;
@@ -163,13 +179,13 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
             return;
         }
 
-        const currentItems = task.multi_prompt_items || [];
-        if (currentItems.length >= maxItems) {
-            alert(`Kling multi_prompt supports a maximum of ${maxItems} images.`);
+        const currentMiddleUrls = task.middle_frame_urls || [];
+        if (currentMiddleUrls.length >= MAX_MULTI_PROMPT_IMAGES) {
+            alert(`Kling multi_prompt supports a maximum of ${MAX_MULTI_PROMPT_IMAGES} images.`);
             return;
         }
 
-        const availableSlots = maxItems - currentItems.length;
+        const availableSlots = MAX_MULTI_PROMPT_IMAGES - currentMiddleUrls.length;
         const filesToUpload = Array.from(files).slice(0, availableSlots);
         if (Array.from(files).length > filesToUpload.length) {
             alert('Maximum images reached for multi_prompt. Extra images were ignored.');
@@ -194,13 +210,9 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
 
         if (uploadedUrls.length === 0) return;
 
-        const nextItems = [
-            ...currentItems,
-            ...uploadedUrls.map((url) => ({ url, prompt: '', duration: '' }))
-        ];
+        const nextMiddleUrls = [...currentMiddleUrls, ...uploadedUrls];
         handleUpdateTask(taskId, {
-            multi_prompt_items: nextItems,
-            middle_frame_urls: nextItems.map((item) => item.url)
+            middle_frame_urls: nextMiddleUrls
         });
     };
 
@@ -277,12 +289,13 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                         </div>
                                         <div style={{ width: '248px', minHeight: '70px', borderRadius: '8px', background: '#1a1a1a', border: '1px dashed rgba(255,255,255,0.12)', padding: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                                <span style={{ fontSize: '10px', color: '#777', textTransform: 'uppercase', fontWeight: 700 }}>Multi Prompt Images</span>
+                                                <span style={{ fontSize: '10px', color: '#777', textTransform: 'uppercase', fontWeight: 700 }}>Reference Images ({(task.middle_frame_urls || []).length}/{MAX_MULTI_PROMPT_IMAGES})</span>
                                                 <button
                                                     onClick={(e) => {
                                                         e.stopPropagation();
                                                         middleImageInputsRef.current[task.id]?.click();
                                                     }}
+                                                    disabled={(task.middle_frame_urls || []).length >= MAX_MULTI_PROMPT_IMAGES}
                                                     style={{ border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: '#bbb', borderRadius: '4px', padding: '2px 6px', fontSize: '10px', cursor: 'pointer' }}
                                                 >
                                                     Upload
@@ -301,49 +314,29 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                                     }}
                                                 />
                                             </div>
-                                            {(task.multi_prompt_items && task.multi_prompt_items.length > 0) ? (
+                                            {(task.middle_frame_urls && task.middle_frame_urls.length > 0) ? (
                                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                                    {task.multi_prompt_items.map((item, idx) => (
-                                                        <div key={`${task.id}-multi-${idx}-${item.url}`} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '6px', padding: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                                    {task.middle_frame_urls.map((url, idx) => (
+                                                        <div key={`${task.id}-multi-ref-${idx}-${url}`} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '6px', padding: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                                             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                                                                 <img
-                                                                    src={toAbsoluteUrl(item.url)}
-                                                                    alt={`Multi ${idx + 1}`}
+                                                                    src={toAbsoluteUrl(url)}
+                                                                    alt={`Reference ${idx + 1}`}
                                                                     style={{ width: '56px', height: '40px', objectFit: 'cover', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.08)' }}
                                                                 />
+                                                                <span style={{ fontSize: '10px', color: '#888' }}>Ref {idx + 1}</span>
                                                                 <button
                                                                     onClick={(e) => {
                                                                         e.stopPropagation();
-                                                                        removeMultiPromptItem(task, idx);
+                                                                        removeMiddleImage(task, idx);
                                                                     }}
                                                                     style={{ marginLeft: 'auto', border: '1px solid rgba(255,255,255,0.12)', background: 'transparent', color: '#999', borderRadius: '4px', padding: '2px 6px', fontSize: '10px', cursor: 'pointer' }}
                                                                 >
                                                                     Remove
                                                                 </button>
                                                             </div>
-                                                            <textarea
-                                                                value={item.prompt || ''}
-                                                                onClick={(e) => e.stopPropagation()}
-                                                                onFocus={() => setPromptFocusTarget({ type: 'multi_prompt_item', taskId: task.id, index: idx })}
-                                                                onChange={(e) => updateMultiPromptItem(task, idx, { prompt: e.target.value })}
-                                                                placeholder="Prompt for this image"
-                                                                style={{ width: '100%', minHeight: '42px', resize: 'vertical', fontSize: '11px', background: 'rgba(0,0,0,0.25)', color: '#eee', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '6px', outline: 'none' }}
-                                                            />
-                                                            <input
-                                                                value={item.duration || ''}
-                                                                onClick={(e) => e.stopPropagation()}
-                                                                onChange={(e) => updateMultiPromptItem(task, idx, { duration: e.target.value })}
-                                                                placeholder="Timing weight (optional, e.g. 2)"
-                                                                style={{ width: '100%', fontSize: '11px', background: 'rgba(0,0,0,0.25)', color: '#eee', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '6px', outline: 'none' }}
-                                                            />
                                                         </div>
                                                     ))}
-                                                    <div style={{ fontSize: '10px', color: '#666' }}>
-                                                        Multi_prompt timing: auto-normalized to exact total duration ({task.duration}s).
-                                                    </div>
-                                                    <div style={{ fontSize: '10px', color: '#666' }}>
-                                                        Tip: optional values are treated as relative weights, not strict seconds.
-                                                    </div>
                                                     {task.last_frame_url && (
                                                         <div style={{ fontSize: '10px', color: '#e67e22' }}>
                                                             Warning: Not possible with last frame. Use either first+last OR multi_prompt.
@@ -415,6 +408,57 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                             }}
                                         />
                                     </div>
+                                </div>
+
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '10px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <label style={{ fontSize: '11px', color: '#888', fontWeight: 600, textTransform: 'uppercase' }}>
+                                            Multi Prompt Shots ({(task.multi_prompt_items || []).length}/{MAX_MULTI_PROMPT_SHOTS})
+                                        </label>
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); addMultiPromptItem(task); }}
+                                            disabled={(task.multi_prompt_items || []).length >= MAX_MULTI_PROMPT_SHOTS}
+                                            style={{ border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: '#bbb', borderRadius: '6px', padding: '3px 8px', fontSize: '11px', cursor: 'pointer' }}
+                                        >
+                                            Add Prompt
+                                        </button>
+                                    </div>
+                                    {(task.multi_prompt_items || []).length > 0 ? (
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                            {(task.multi_prompt_items || []).map((item, idx) => (
+                                                <div key={`${task.id}-shot-${idx}`} style={{ display: 'grid', gridTemplateColumns: '1fr 120px min-content', gap: '8px', alignItems: 'start' }}>
+                                                    <textarea
+                                                        value={item.prompt || ''}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        onFocus={() => setPromptFocusTarget({ type: 'multi_prompt_item', taskId: task.id, index: idx })}
+                                                        onChange={(e) => updateMultiPromptItem(task, idx, { prompt: e.target.value })}
+                                                        placeholder={`Shot ${idx + 1} prompt`}
+                                                        style={{ width: '100%', minHeight: '46px', resize: 'vertical', fontSize: '12px', background: 'rgba(0,0,0,0.25)', color: '#eee', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', padding: '8px', outline: 'none' }}
+                                                    />
+                                                    <input
+                                                        value={item.duration || ''}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        onChange={(e) => updateMultiPromptItem(task, idx, { duration: e.target.value })}
+                                                        placeholder="Weight"
+                                                        style={{ width: '100%', fontSize: '12px', background: 'rgba(0,0,0,0.25)', color: '#eee', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', padding: '8px', outline: 'none' }}
+                                                    />
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); removeMultiPromptItem(task, idx); }}
+                                                        style={{ border: '1px solid rgba(255,255,255,0.12)', background: 'transparent', color: '#999', borderRadius: '6px', padding: '6px 8px', fontSize: '11px', cursor: 'pointer' }}
+                                                    >
+                                                        Remove
+                                                    </button>
+                                                </div>
+                                            ))}
+                                            <div style={{ fontSize: '10px', color: '#666' }}>
+                                                Up to {MAX_MULTI_PROMPT_SHOTS} prompts. Timing is auto-normalized to total duration ({task.duration}s).
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div style={{ fontSize: '11px', color: '#666' }}>
+                                            Add prompt rows for storyboard shots.
+                                        </div>
+                                    )}
                                 </div>
 
                                 <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>

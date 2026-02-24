@@ -57,6 +57,7 @@ const io = new Server(httpServer, {
     }
 });
 const KLING_MULTI_PROMPT_MAX_IMAGES = 3;
+const KLING_MULTI_PROMPT_MAX_SHOTS = 6;
 
 // ===========================
 // PROJECT ENDPOINTS
@@ -836,15 +837,15 @@ const parseMiddleUrls = (raw: unknown): string[] => {
     }
 };
 
-const parseMultiPromptItems = (raw: unknown, fallbackRawUrls?: unknown): Array<{ url: string; prompt: string; duration: string }> => {
+const parseMultiPromptItems = (raw: unknown, fallbackRawUrls?: unknown): Array<{ url?: string; prompt: string; duration: string }> => {
     if (raw && typeof raw === 'string') {
         try {
             const parsed = JSON.parse(raw);
             if (Array.isArray(parsed)) {
                 return parsed
-                    .filter((item) => item && typeof item === 'object' && typeof item.url === 'string')
+                    .filter((item) => item && typeof item === 'object')
                     .map((item: any) => ({
-                        url: item.url,
+                        ...(typeof item.url === 'string' && item.url ? { url: item.url } : {}),
                         prompt: typeof item.prompt === 'string' ? item.prompt : '',
                         duration: typeof item.duration === 'string' ? item.duration : ''
                     }));
@@ -853,7 +854,7 @@ const parseMultiPromptItems = (raw: unknown, fallbackRawUrls?: unknown): Array<{
             // fallback below
         }
     }
-    return parseMiddleUrls(fallbackRawUrls).map((url) => ({ url, prompt: '', duration: '' }));
+    return [];
 };
 
 app.get('/api/batch/tasks', (req: any, res: any) => {
@@ -964,16 +965,13 @@ app.post('/api/batch/add-frame', (req: any, res: any) => {
                     return res.status(400).json({ error: 'Not possible: either first+last frame OR multi_prompt.' });
                 }
 
-                const currentItems = parseMultiPromptItems(existingRow.multi_prompt_items, existingRow.middle_frame_urls);
-                const maxMultiPromptImages = KLING_MULTI_PROMPT_MAX_IMAGES;
-                if (currentItems.length >= maxMultiPromptImages) {
+                const currentMiddleUrls = parseMiddleUrls(existingRow.middle_frame_urls);
+                if (currentMiddleUrls.length >= KLING_MULTI_PROMPT_MAX_IMAGES) {
                     return res.status(400).json({ error: `Kling multi_prompt supports a maximum of ${KLING_MULTI_PROMPT_MAX_IMAGES} images.` });
                 }
 
-                const updatedItems = [...currentItems, { url, prompt: '', duration: '' }];
-                const updatedMiddleUrls = updatedItems.map((item) => item.url);
-                db.prepare('UPDATE batch_tasks SET multi_prompt_items = ?, middle_frame_urls = ? WHERE id = ?').run(
-                    JSON.stringify(updatedItems),
+                const updatedMiddleUrls = [...currentMiddleUrls, url];
+                db.prepare('UPDATE batch_tasks SET middle_frame_urls = ? WHERE id = ?').run(
                     JSON.stringify(updatedMiddleUrls),
                     existingRow.id
                 );
@@ -986,11 +984,10 @@ app.post('/api/batch/add-frame', (req: any, res: any) => {
             }
 
             const id = crypto.randomUUID();
-            const initialItems = [{ url, prompt: '', duration: '' }];
             db.prepare('INSERT INTO batch_tasks (id, middle_frame_urls, multi_prompt_items, aspect_ratio, model_name, mode) VALUES (?, ?, ?, ?, ?, ?)').run(
                 id,
-                JSON.stringify(initialItems.map((item) => item.url)),
-                JSON.stringify(initialItems),
+                JSON.stringify([url]),
+                JSON.stringify([]),
                 '16:9',
                 'kling-v3',
                 'pro'
@@ -999,8 +996,8 @@ app.post('/api/batch/add-frame', (req: any, res: any) => {
                 id,
                 first_frame_url: null,
                 last_frame_url: null,
-                middle_frame_urls: initialItems.map((item) => item.url),
-                multi_prompt_items: initialItems,
+                middle_frame_urls: [url],
+                multi_prompt_items: [],
                 prompt: '',
                 duration: 5,
                 audio_enabled: false,
@@ -1107,32 +1104,48 @@ app.patch('/api/batch/tasks/:id', (req: any, res: any) => {
     if (multi_prompt_items !== undefined) {
         const normalizedItems = Array.isArray(multi_prompt_items)
             ? multi_prompt_items
-                .filter((item: any) => item && typeof item.url === 'string')
+                .filter((item: any) => item && typeof item === 'object')
                 .map((item: any) => ({
-                    url: item.url,
+                    ...(typeof item.url === 'string' && item.url ? { url: item.url } : {}),
                     prompt: typeof item.prompt === 'string' ? item.prompt : '',
                     duration: typeof item.duration === 'string' ? item.duration : ''
                 }))
             : [];
         updates.push('multi_prompt_items = ?');
         values.push(JSON.stringify(normalizedItems));
-        updates.push('middle_frame_urls = ?');
-        values.push(JSON.stringify(normalizedItems.map((item: any) => item.url)));
     }
 
     if (updates.length === 0) return res.status(400).json({ error: 'No fields to update' });
 
     try {
+        if (middle_frame_urls !== undefined) {
+            const current = db.prepare('SELECT last_frame_url FROM batch_tasks WHERE id = ?').get(req.params.id) as any;
+            const normalizedMiddle = Array.isArray(middle_frame_urls)
+                ? middle_frame_urls.filter((url: any) => typeof url === 'string' && url)
+                : [];
+            if (current?.last_frame_url && normalizedMiddle.length > 0) {
+                return res.status(400).json({ error: 'Not possible: either first+last frame OR multi_prompt.' });
+            }
+            if (normalizedMiddle.length > KLING_MULTI_PROMPT_MAX_IMAGES) {
+                return res.status(400).json({ error: `Kling multi_prompt supports a maximum of ${KLING_MULTI_PROMPT_MAX_IMAGES} images.` });
+            }
+        }
         if (multi_prompt_items !== undefined) {
-            const current = db.prepare('SELECT first_frame_url, last_frame_url FROM batch_tasks WHERE id = ?').get(req.params.id) as any;
+            const current = db.prepare('SELECT first_frame_url, last_frame_url, middle_frame_urls FROM batch_tasks WHERE id = ?').get(req.params.id) as any;
             const normalizedItems = Array.isArray(multi_prompt_items)
-                ? multi_prompt_items.filter((item: any) => item && typeof item.url === 'string')
+                ? multi_prompt_items.filter((item: any) => item && typeof item === 'object')
                 : [];
             if (current?.last_frame_url && normalizedItems.length > 0) {
                 return res.status(400).json({ error: 'Not possible: either first+last frame OR multi_prompt.' });
             }
-            const maxItems = KLING_MULTI_PROMPT_MAX_IMAGES;
-            if (normalizedItems.length > maxItems) {
+            if (normalizedItems.length > KLING_MULTI_PROMPT_MAX_SHOTS) {
+                return res.status(400).json({ error: `Kling multi_prompt supports a maximum of ${KLING_MULTI_PROMPT_MAX_SHOTS} prompts.` });
+            }
+            const refsFromPrompts = normalizedItems.filter((item: any) => typeof item.url === 'string' && item.url).length;
+            const refsFromMiddle = middle_frame_urls !== undefined
+                ? (Array.isArray(middle_frame_urls) ? middle_frame_urls.filter((u: any) => typeof u === 'string' && u).length : 0)
+                : parseMiddleUrls(current?.middle_frame_urls).length;
+            if (Math.max(refsFromPrompts, refsFromMiddle) > KLING_MULTI_PROMPT_MAX_IMAGES) {
                 return res.status(400).json({ error: `Kling multi_prompt supports a maximum of ${KLING_MULTI_PROMPT_MAX_IMAGES} images.` });
             }
         }
@@ -1263,19 +1276,17 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
 
             let firstFrame = getPublicUrl(task.first_frame_url);
             const lastFrame = getPublicUrl(task.last_frame_url);
-            let multiPromptItems = parseMultiPromptItems(task.multi_prompt_items, task.middle_frame_urls)
-                .map((item) => {
-                    const resolved = getPublicUrl(item.url);
-                    return resolved ? { ...item, url: resolved } : null;
-                })
-                .filter((item): item is { url: string; prompt: string; duration: string } => item !== null);
+            let multiPromptItems = parseMultiPromptItems(task.multi_prompt_items, task.middle_frame_urls);
+            let middleRefImages = parseMiddleUrls(task.middle_frame_urls)
+                .map((url) => getPublicUrl(url))
+                .filter((url): url is string => !!url);
 
-            // Recovery path: if no explicit first frame exists, use the first multi-prompt image as the starting image.
-            if (!firstFrame && multiPromptItems.length > 0) {
-                const fallbackFirst = multiPromptItems[0];
+            // Recovery path: if no explicit first frame exists, use the first middle reference image as start image.
+            if (!firstFrame && middleRefImages.length > 0) {
+                const fallbackFirst = middleRefImages[0];
                 if (fallbackFirst) {
-                    firstFrame = fallbackFirst.url;
-                    multiPromptItems = multiPromptItems.slice(1);
+                    firstFrame = fallbackFirst;
+                    middleRefImages = middleRefImages.slice(1);
                 }
             }
 
@@ -1289,9 +1300,14 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
                 db.prepare('UPDATE batch_tasks SET status = ?, error = ? WHERE id = ?').run('failed', 'Not possible: either first+last frame OR multi_prompt', task.id);
                 continue;
             }
-            if (multiPromptItems.length > KLING_MULTI_PROMPT_MAX_IMAGES) {
-                console.error(`❌ [Kling] Task ${task.id} invalid config: too many multi_prompt images`);
+            if (middleRefImages.length > KLING_MULTI_PROMPT_MAX_IMAGES) {
+                console.error(`❌ [Kling] Task ${task.id} invalid config: too many reference images`);
                 db.prepare('UPDATE batch_tasks SET status = ?, error = ? WHERE id = ?').run('failed', `Kling multi_prompt supports a maximum of ${KLING_MULTI_PROMPT_MAX_IMAGES} images`, task.id);
+                continue;
+            }
+            if (multiPromptItems.length > KLING_MULTI_PROMPT_MAX_SHOTS) {
+                console.error(`❌ [Kling] Task ${task.id} invalid config: too many prompts`);
+                db.prepare('UPDATE batch_tasks SET status = ?, error = ? WHERE id = ?').run('failed', `Kling multi_prompt supports a maximum of ${KLING_MULTI_PROMPT_MAX_SHOTS} prompts`, task.id);
                 continue;
             }
 

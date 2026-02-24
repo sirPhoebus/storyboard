@@ -34,7 +34,7 @@ export interface KlingTaskOptions {
     image?: string;
     image_tail?: string;
     middle_images?: string[];
-    multi_prompt_items?: Array<{ url: string; prompt?: string; duration?: string }>;
+    multi_prompt_items?: Array<{ url?: string; prompt?: string; duration?: string }>;
     model_name?: KlingModel;
     mode?: KlingMode;
     duration?: '5' | '10' | '15';
@@ -47,6 +47,7 @@ export interface KlingTaskOptions {
 }
 
 const KLING_MULTI_PROMPT_MAX_IMAGES = 3;
+const KLING_MULTI_PROMPT_MAX_SHOTS = 6;
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -384,7 +385,7 @@ export class KlingImageToVideoService {
             image?: string;
             image_tail?: string;
             middle_images?: string[];
-            multi_prompt_items?: Array<{ url: string; prompt?: string; duration?: string }>;
+            multi_prompt_items?: Array<{ url?: string; prompt?: string; duration?: string }>;
             prompt?: string;
             duration?: '5' | '10' | '15';
             model_name?: string;
@@ -479,16 +480,20 @@ export class KlingImageToVideoService {
         if (params.image_tail) payload.image_tail = await resolveImage(params.image_tail);
 
         const normalizedItems = params.multi_prompt_items?.length
-            ? params.multi_prompt_items
+            ? params.multi_prompt_items.map((item) => ({
+                url: typeof item?.url === 'string' && item.url.trim() ? item.url : undefined,
+                prompt: typeof item?.prompt === 'string' ? item.prompt : '',
+                duration: typeof item?.duration === 'string' ? item.duration : ''
+            }))
             : (params.middle_images || []).map((url) => ({ url, prompt: params.prompt || '', duration: '' }));
 
-        if (normalizedItems.length) {
-            payload.middle_images = await Promise.all(normalizedItems.map((item) => resolveImage(item.url)));
-        }
-
         if ((params.model_name || 'kling-v3') === 'kling-v3') {
-            if (normalizedItems.length > KLING_MULTI_PROMPT_MAX_IMAGES) {
+            const referenceImageCount = normalizedItems.filter((item) => !!item.url).length;
+            if (referenceImageCount > KLING_MULTI_PROMPT_MAX_IMAGES) {
                 throw new Error(`Kling multi_prompt supports a maximum of ${KLING_MULTI_PROMPT_MAX_IMAGES} images`);
+            }
+            if (normalizedItems.length > KLING_MULTI_PROMPT_MAX_SHOTS) {
+                throw new Error(`Kling multi_prompt supports a maximum of ${KLING_MULTI_PROMPT_MAX_SHOTS} prompts`);
             }
 
             payload.multi_shot = normalizedItems.length > 0;
@@ -572,7 +577,7 @@ export class KlingImageToVideoService {
             image?: string;
             image_tail?: string;
             middle_images?: string[];
-            multi_prompt_items?: Array<{ url: string; prompt?: string; duration?: string }>;
+            multi_prompt_items?: Array<{ url?: string; prompt?: string; duration?: string }>;
             prompt?: string;
             duration?: '5' | '10' | '15';
             model_name?: string;
