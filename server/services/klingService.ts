@@ -97,6 +97,27 @@ const fetchWithRetry = async (
     throw new Error('Exhausted retries');
 };
 
+const normalizeHttpUrl = (rawUrl: string): string => {
+    try {
+        const parsed = new URL(rawUrl);
+        const normalizedPath = parsed.pathname
+            .split('/')
+            .map((segment) => {
+                if (!segment) return segment;
+                try {
+                    return encodeURIComponent(decodeURIComponent(segment));
+                } catch {
+                    return encodeURIComponent(segment);
+                }
+            })
+            .join('/');
+        parsed.pathname = normalizedPath;
+        return parsed.toString();
+    } catch {
+        return encodeURI(rawUrl);
+    }
+};
+
 const computeKlingShotDurations = (
     itemCount: number,
     totalDurationSeconds: number,
@@ -385,24 +406,38 @@ export class KlingImageToVideoService {
             
             // 1. If it's already a full URL, return it
             if (rawUrl.startsWith('http')) {
-                let finalUrl = rawUrl;
+                let finalUrl = normalizeHttpUrl(rawUrl);
                  // Force HTTPS for Railway
                 if (finalUrl.includes('.up.railway.app') && finalUrl.startsWith('http:')) {
                     finalUrl = finalUrl.replace('http:', 'https:');
                 }
+
+                // If this URL points to our local uploads and file exists, prefer base64 to avoid remote URL parsing issues.
+                try {
+                    const parsed = new URL(finalUrl);
+                    const dataDir = process.env.DATA_DIR || process.cwd();
+                    const decodedPathname = (() => {
+                        try {
+                            return decodeURIComponent(parsed.pathname);
+                        } catch {
+                            return parsed.pathname;
+                        }
+                    })();
+                    const maybeLocalPath = path.join(
+                        dataDir,
+                        decodedPathname.startsWith('/') ? decodedPathname.slice(1) : decodedPathname
+                    );
+                    if (parsed.pathname.includes('/uploads/') && fs.existsSync(maybeLocalPath)) {
+                        const fileBuffer = await fs.promises.readFile(maybeLocalPath);
+                        return fileBuffer.toString('base64');
+                    }
+                } catch {
+                    // keep URL fallback
+                }
                 return finalUrl;
             }
 
-            // 2. Try to construct absolute URL if BASE_URL is set
-            const baseUrl = process.env.STORYBOARD_BASE_URL;
-            if (baseUrl) {
-                const cleanPath = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
-                return `${baseUrl}${cleanPath}`;
-            }
-
-            // 3. Fallback: Convert to Base64
-            console.log(`ℹ️ STORYBOARD_BASE_URL not set for relative path ${rawUrl}, using Base64 fallback for Kling upload.`);
-            
+            // 2. Convert relative/local paths to Base64 (preferred for reliability)
             try {
                 const dataDir = process.env.DATA_DIR || process.cwd();
                 // Remove leading slash to join correctly
@@ -414,14 +449,19 @@ export class KlingImageToVideoService {
                     const base64Image = fileBuffer.toString('base64');
                     console.log(`✓ Converted image to Base64 (${base64Image.length} chars)`);
                     return base64Image;
-                } else {
-                    console.error(`❌ Local file not found at ${localPath}`);
-                    return rawUrl;
                 }
+                console.error(`❌ Local file not found at ${localPath}`);
             } catch (err) {
                 console.error(`❌ Failed to convert to Base64: ${err}`);
-                return rawUrl;
             }
+
+            // 3. Fallback to public URL when file is not local
+            const baseUrl = process.env.STORYBOARD_BASE_URL;
+            if (baseUrl) {
+                const cleanPath = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
+                return normalizeHttpUrl(`${baseUrl}${cleanPath}`);
+            }
+            return rawUrl;
         };
 
         if (params.image) payload.image = await resolveImage(params.image);
