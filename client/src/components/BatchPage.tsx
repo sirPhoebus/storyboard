@@ -154,6 +154,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
 
     const handleUploadMiddleImages = async (taskId: string, files: FileList | null) => {
         if (!files || files.length === 0) return;
+        const maxItems = 3;
 
         const task = tasks.find(t => t.id === taskId);
         if (!task) return;
@@ -163,9 +164,8 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
         }
 
         const currentItems = task.multi_prompt_items || [];
-        const maxItems = task.first_frame_url ? 5 : 6;
         if (currentItems.length >= maxItems) {
-            alert('Kling multi_prompt supports a maximum of 6 images.');
+            alert(`Kling multi_prompt supports a maximum of ${maxItems} images.`);
             return;
         }
 

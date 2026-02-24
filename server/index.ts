@@ -56,6 +56,7 @@ const io = new Server(httpServer, {
         origin: '*',
     }
 });
+const KLING_MULTI_PROMPT_MAX_IMAGES = 3;
 
 // ===========================
 // PROJECT ENDPOINTS
@@ -964,9 +965,9 @@ app.post('/api/batch/add-frame', (req: any, res: any) => {
                 }
 
                 const currentItems = parseMultiPromptItems(existingRow.multi_prompt_items, existingRow.middle_frame_urls);
-                const maxMultiPromptImages = existingRow.first_frame_url ? 5 : 6;
+                const maxMultiPromptImages = KLING_MULTI_PROMPT_MAX_IMAGES;
                 if (currentItems.length >= maxMultiPromptImages) {
-                    return res.status(400).json({ error: 'Kling multi_prompt supports a maximum of 6 images.' });
+                    return res.status(400).json({ error: `Kling multi_prompt supports a maximum of ${KLING_MULTI_PROMPT_MAX_IMAGES} images.` });
                 }
 
                 const updatedItems = [...currentItems, { url, prompt: '', duration: '' }];
@@ -1130,9 +1131,9 @@ app.patch('/api/batch/tasks/:id', (req: any, res: any) => {
             if (current?.last_frame_url && normalizedItems.length > 0) {
                 return res.status(400).json({ error: 'Not possible: either first+last frame OR multi_prompt.' });
             }
-            const maxItems = current?.first_frame_url ? 5 : 6;
+            const maxItems = KLING_MULTI_PROMPT_MAX_IMAGES;
             if (normalizedItems.length > maxItems) {
-                return res.status(400).json({ error: 'Kling multi_prompt supports a maximum of 6 images.' });
+                return res.status(400).json({ error: `Kling multi_prompt supports a maximum of ${KLING_MULTI_PROMPT_MAX_IMAGES} images.` });
             }
         }
         db.prepare(`UPDATE batch_tasks SET ${updates.join(', ')} WHERE id = ?`).run(...values, req.params.id);
@@ -1288,9 +1289,9 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
                 db.prepare('UPDATE batch_tasks SET status = ?, error = ? WHERE id = ?').run('failed', 'Not possible: either first+last frame OR multi_prompt', task.id);
                 continue;
             }
-            if ((1 + multiPromptItems.length) > 6) {
+            if (multiPromptItems.length > KLING_MULTI_PROMPT_MAX_IMAGES) {
                 console.error(`❌ [Kling] Task ${task.id} invalid config: too many multi_prompt images`);
-                db.prepare('UPDATE batch_tasks SET status = ?, error = ? WHERE id = ?').run('failed', 'Kling multi_prompt supports a maximum of 6 images', task.id);
+                db.prepare('UPDATE batch_tasks SET status = ?, error = ? WHERE id = ?').run('failed', `Kling multi_prompt supports a maximum of ${KLING_MULTI_PROMPT_MAX_IMAGES} images`, task.id);
                 continue;
             }
 

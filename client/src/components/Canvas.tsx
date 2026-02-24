@@ -712,8 +712,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 setMiddleMenuDisabledReason('Not possible: either first frame + last frame OR multi_prompt.');
             } else {
                 const items = Array.isArray(latestOpenTask.multi_prompt_items) ? latestOpenTask.multi_prompt_items : [];
-                const maxItems = latestOpenTask.first_frame_url ? 5 : 6;
-                setMiddleMenuDisabledReason(items.length >= maxItems ? 'Maximum images reached for multi_prompt (6 images max).' : null);
+                const maxItems = 3;
+                setMiddleMenuDisabledReason(items.length >= maxItems ? `Maximum images reached for multi_prompt (${maxItems} images max).` : null);
             }
         } catch {
             setMiddleMenuDisabledReason(null);

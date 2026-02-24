@@ -46,6 +46,8 @@ export interface KlingTaskOptions {
     external_task_id?: string;
 }
 
+const KLING_MULTI_PROMPT_MAX_IMAGES = 3;
+
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 const isRetryableError = (err: unknown): boolean => {
@@ -216,6 +218,9 @@ export class KlingService {
         if (options.prompt) payload.prompt = options.prompt;
         if (options.negative_prompt) payload.negative_prompt = options.negative_prompt;
         if (options.image_tail) payload.image_tail = options.image_tail;
+        if ((options.middle_images?.length ?? 0) > KLING_MULTI_PROMPT_MAX_IMAGES) {
+            throw new Error(`Kling multi_prompt supports a maximum of ${KLING_MULTI_PROMPT_MAX_IMAGES} images`);
+        }
         if (options.middle_images?.length) payload.middle_images = options.middle_images;
         if (options.cfg_scale !== undefined) payload.cfg_scale = options.cfg_scale;
         if (options.camera_control) payload.camera_control = options.camera_control;
@@ -223,7 +228,7 @@ export class KlingService {
         if (options.external_task_id !== undefined) payload.external_task_id = options.external_task_id;
 
         if ((options.model_name || 'kling-v3') === 'kling-v3') {
-            payload.multi_shot = options.middle_images?.length ? 'true' : 'false';
+            payload.multi_shot = !!options.middle_images?.length;
             if (options.middle_images?.length) {
                 payload.shot_type = 'customize';
             }
@@ -402,10 +407,17 @@ export class KlingImageToVideoService {
 
         const resolveImage = async (rawUrl: string): Promise<string> => {
             if (!rawUrl) return rawUrl;
+            const trimmed = rawUrl.trim();
+
+            // Kling expects pure Base64 content (no data URI prefix).
+            const base64PrefixMatch = trimmed.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/);
+            if (base64PrefixMatch?.[1]) {
+                return base64PrefixMatch[1];
+            }
             
             // 1. If it's already a full URL, return it
-            if (rawUrl.startsWith('http')) {
-                let finalUrl = normalizeHttpUrl(rawUrl);
+            if (trimmed.startsWith('http')) {
+                let finalUrl = normalizeHttpUrl(trimmed);
                  // Force HTTPS for Railway
                 if (finalUrl.includes('.up.railway.app') && finalUrl.startsWith('http:')) {
                     finalUrl = finalUrl.replace('http:', 'https:');
@@ -440,7 +452,7 @@ export class KlingImageToVideoService {
             try {
                 const dataDir = process.env.DATA_DIR || process.cwd();
                 // Remove leading slash to join correctly
-                const relativePath = rawUrl.startsWith('/') ? rawUrl.slice(1) : rawUrl;
+                const relativePath = trimmed.startsWith('/') ? trimmed.slice(1) : trimmed;
                 const localPath = path.join(dataDir, relativePath);
 
                 if (fs.existsSync(localPath)) {
@@ -457,10 +469,10 @@ export class KlingImageToVideoService {
             // 3. Fallback to public URL when file is not local
             const baseUrl = process.env.STORYBOARD_BASE_URL;
             if (baseUrl) {
-                const cleanPath = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
+                const cleanPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
                 return normalizeHttpUrl(`${baseUrl}${cleanPath}`);
             }
-            return rawUrl;
+            return trimmed;
         };
 
         if (params.image) payload.image = await resolveImage(params.image);
@@ -475,12 +487,11 @@ export class KlingImageToVideoService {
         }
 
         if ((params.model_name || 'kling-v3') === 'kling-v3') {
-            const totalImages = 1 + normalizedItems.length;
-            if (totalImages > 6) {
-                throw new Error('Kling multi_prompt supports a maximum of 6 images');
+            if (normalizedItems.length > KLING_MULTI_PROMPT_MAX_IMAGES) {
+                throw new Error(`Kling multi_prompt supports a maximum of ${KLING_MULTI_PROMPT_MAX_IMAGES} images`);
             }
 
-            payload.multi_shot = normalizedItems.length > 0 ? 'true' : 'false';
+            payload.multi_shot = normalizedItems.length > 0;
             if (normalizedItems.length > 0) {
                 // Match Kling v3 multi-shot example behavior:
                 // keep top-level prompt empty and drive all shots via multi_prompt entries.
