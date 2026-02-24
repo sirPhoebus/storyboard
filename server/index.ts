@@ -10,9 +10,12 @@ import crypto from 'crypto';
 import archiver from 'archiver';
 import { KlingService, KlingImageToVideoService } from './services/klingService';
 import getVideoDimensions from 'get-video-dimensions';
+import jwt from 'jsonwebtoken';
 
 const dataDir = process.env.DATA_DIR || process.cwd();
 const uploadsDir = path.join(dataDir, 'uploads');
+const AUTH_JWT_SECRET = process.env.AUTH_JWT_SECRET || 'dev-secret-change-me';
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 
 // Ensure uploads directory exists
 import fs from 'fs';
@@ -54,6 +57,167 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, {
     cors: {
         origin: '*',
+    }
+});
+
+type AuthedUser = {
+    email: string;
+    name: string;
+    picture?: string;
+};
+
+type AuthRequest = express.Request & {
+    user?: AuthedUser;
+};
+
+const parseBearerToken = (header?: string) => {
+    if (!header || !header.startsWith('Bearer ')) return null;
+    return header.slice('Bearer '.length).trim();
+};
+
+const verifyAuthToken = (token: string): AuthedUser | null => {
+    try {
+        return jwt.verify(token, AUTH_JWT_SECRET) as AuthedUser;
+    } catch {
+        return null;
+    }
+};
+
+const attachUser = (req: AuthRequest, _res: express.Response, next: express.NextFunction) => {
+    const token = parseBearerToken(req.headers.authorization);
+    if (token) {
+        const user = verifyAuthToken(token);
+        if (user) req.user = user;
+    }
+    next();
+};
+
+const requireAuth = (req: AuthRequest, res: express.Response, next: express.NextFunction) => {
+    if (!req.user) return res.status(401).json({ error: 'Authentication required' });
+    next();
+};
+
+const chatCutoffAtMidnight = () => {
+    const now = new Date();
+    const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    midnight.setDate(midnight.getDate() - 6);
+    return midnight.toISOString().slice(0, 19).replace('T', ' ');
+};
+
+const pruneChatMessages = () => {
+    db.prepare('DELETE FROM chat_messages WHERE created_at < ?').run(chatCutoffAtMidnight());
+};
+
+const scheduleMidnightChatPrune = () => {
+    const now = new Date();
+    const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    const delay = nextMidnight.getTime() - now.getTime();
+
+    setTimeout(() => {
+        pruneChatMessages();
+        scheduleMidnightChatPrune();
+    }, delay);
+};
+
+app.use(attachUser);
+scheduleMidnightChatPrune();
+
+// ===========================
+// AUTH ENDPOINTS
+// ===========================
+
+app.post('/api/auth/google', async (req: any, res: any) => {
+    const credential = req.body?.credential;
+    if (!credential || typeof credential !== 'string') {
+        return res.status(400).json({ error: 'Missing Google credential' });
+    }
+
+    try {
+        const verifyRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`);
+        if (!verifyRes.ok) {
+            return res.status(401).json({ error: 'Invalid Google credential' });
+        }
+
+        const payload = await verifyRes.json() as {
+            aud?: string;
+            email?: string;
+            name?: string;
+            picture?: string;
+        };
+
+        if (GOOGLE_CLIENT_ID && payload.aud !== GOOGLE_CLIENT_ID) {
+            return res.status(401).json({ error: 'Google credential audience mismatch' });
+        }
+        if (!payload.email || !payload.name) {
+            return res.status(401).json({ error: 'Invalid Google profile data' });
+        }
+
+        const user: AuthedUser = {
+            email: payload.email,
+            name: payload.name,
+            ...(payload.picture ? { picture: payload.picture } : {})
+        };
+        const token = jwt.sign(user, AUTH_JWT_SECRET, { expiresIn: '7d' });
+        return res.json({ token, user });
+    } catch (err: any) {
+        return res.status(500).json({ error: err?.message || 'Authentication failed' });
+    }
+});
+
+app.get('/api/auth/config', (_req: any, res: any) => {
+    res.json({
+        googleEnabled: !!GOOGLE_CLIENT_ID,
+        googleClientId: GOOGLE_CLIENT_ID || null
+    });
+});
+
+app.get('/api/auth/me', (req: AuthRequest, res: any) => {
+    if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
+    return res.json(req.user);
+});
+
+// ===========================
+// CHAT ENDPOINTS
+// ===========================
+
+app.get('/api/chat/messages', (_req: any, res: any) => {
+    try {
+        pruneChatMessages();
+        const messages = db.prepare('SELECT * FROM chat_messages ORDER BY created_at ASC').all();
+        res.json(messages);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/chat/messages', (req: AuthRequest, res: any) => {
+    const raw = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+    const rawUsername = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
+    const rawUserEmail = typeof req.body?.userEmail === 'string' ? req.body.userEmail.trim() : '';
+    if (!raw) return res.status(400).json({ error: 'Message is required' });
+    if (raw.length > 1000) return res.status(400).json({ error: 'Message too long' });
+    const username = req.user?.name || rawUsername || 'Guest';
+    const userEmail = req.user?.email || rawUserEmail || `guest-${crypto.randomUUID()}@guest.local`;
+
+    try {
+        pruneChatMessages();
+        const message = {
+            id: crypto.randomUUID(),
+            user_email: userEmail,
+            username,
+            message: raw
+        };
+        db.prepare('INSERT INTO chat_messages (id, user_email, username, message) VALUES (?, ?, ?, ?)').run(
+            message.id,
+            message.user_email,
+            message.username,
+            message.message
+        );
+        const saved = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(message.id);
+        io.emit('chat:message', saved);
+        res.json(saved);
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
     }
 });
 
@@ -1439,7 +1603,18 @@ app.get('/api/prompts', (req: any, res: any) => {
 });
 
 io.on('connection', (socket: any) => {
-    console.log('✅ A user connected:', socket.id);
+    const token = socket.handshake?.auth?.token;
+    const user = typeof token === 'string' ? verifyAuthToken(token) : null;
+    if (user) {
+        socket.data.user = user;
+        console.log(`✅ A user connected: ${socket.id} (${user.email})`);
+    } else {
+        socket.data.user = {
+            email: `guest-${socket.id}@guest.local`,
+            name: 'Guest'
+        };
+        console.log(`✅ A guest connected: ${socket.id}`);
+    }
     broadcastUserCount();
 
     socket.on('element:move', (data: any) => {

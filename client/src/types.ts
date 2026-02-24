@@ -69,3 +69,17 @@ export interface BatchTask {
     cfg_scale: number;
     negative_prompt?: string;
 }
+
+export interface AuthUser {
+    email: string;
+    name: string;
+    picture?: string;
+}
+
+export interface ChatMessage {
+    id: string;
+    user_email: string;
+    username: string;
+    message: string;
+    created_at: string;
+}

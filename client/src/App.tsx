@@ -8,6 +8,7 @@ import { useSocket } from './hooks/useSocket'
 import { useProjects } from './hooks/useProjects'
 import HelpManual from './components/HelpManual'
 import BatchPage from './components/BatchPage'
+import ChatRoomModal from './components/ChatRoomModal'
 
 
 
@@ -24,10 +25,25 @@ function App() {
   const [sidebarWidth, setSidebarWidth] = useState(260);
   const [connectedUsers, setConnectedUsers] = useState(1);
   const [isManualOpen, setIsManualOpen] = useState(false);
+  const [isChatOpen, setIsChatOpen] = useState(false);
   const [view, setView] = useState<'canvas' | 'batch'>('canvas');
   const [currentStoryboardId, setCurrentStoryboardId] = useState<string | null>(null);
+  const [username, setUsername] = useState<string>(() => localStorage.getItem('chat_username') || '');
 
   const pages = allPages.filter(p => p.chapter_id === currentChapterId);
+
+  useEffect(() => {
+    if (!username) {
+      if (sessionStorage.getItem('chat_username_prompted') === '1') {
+        return;
+      }
+      sessionStorage.setItem('chat_username_prompted', '1');
+      const entered = window.prompt('Enter your display name:', 'Guest');
+      const finalName = (entered && entered.trim()) ? entered.trim() : `Guest-${Math.floor(Math.random() * 10000)}`;
+      setUsername(finalName);
+      localStorage.setItem('chat_username', finalName);
+    }
+  }, [username]);
 
   // Fetch Storyboard when Project Changes
   useEffect(() => {
@@ -142,6 +158,10 @@ function App() {
         });
       });
 
+      socket.on('chat:message', () => {
+        setIsChatOpen((open) => (open ? open : true));
+      });
+
       return () => {
         socket.off('user_count');
         socket.off('chapter:add');
@@ -151,6 +171,7 @@ function App() {
         socket.off('page:update');
         socket.off('page:delete');
         socket.off('pages:reorder');
+        socket.off('chat:message');
       };
     }
   }, [socket, currentChapterId, currentPageId]);
@@ -294,6 +315,10 @@ function App() {
     }
   };
 
+  if (!username) {
+    return <div style={{ width: '100vw', height: '100vh', display: 'grid', placeItems: 'center', color: '#bbb' }}>Loading workspace...</div>;
+  }
+
   return (
     <div className="App" style={{ display: 'flex', flexDirection: 'column', width: '100vw', height: '100vh', overflow: 'hidden' }}>
       <ProjectTabs
@@ -304,6 +329,9 @@ function App() {
         onRenameProject={renameProject}
         onDeleteProject={deleteProject}
         onOpenHelp={() => setIsManualOpen(true)}
+        onOpenChat={() => setIsChatOpen(true)}
+        connectedUsers={connectedUsers}
+        username={username}
       />
 
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
@@ -352,6 +380,12 @@ function App() {
 
 
       <HelpManual isOpen={isManualOpen} onClose={() => setIsManualOpen(false)} />
+      <ChatRoomModal
+        isOpen={isChatOpen}
+        onClose={() => setIsChatOpen(false)}
+        username={username}
+        socket={socket}
+      />
 
       <style>{`
         .hover-lift:hover {
