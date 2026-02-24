@@ -831,7 +831,16 @@ app.get('/api/batch/tasks', (req: any, res: any) => {
         res.json(tasks.map((t: any) => ({
             ...t,
             audio_enabled: !!t.audio_enabled,
-            aspect_ratio: t.aspect_ratio || '16:9'
+            aspect_ratio: t.aspect_ratio || '16:9',
+            middle_frame_urls: (() => {
+                if (!t.middle_frame_urls) return [];
+                try {
+                    const parsed = JSON.parse(t.middle_frame_urls);
+                    return Array.isArray(parsed) ? parsed : [];
+                } catch {
+                    return [];
+                }
+            })()
         })));
     } catch (err: any) {
         res.status(500).json({ error: err.message });
@@ -912,12 +921,68 @@ app.post('/api/videos/sync', async (req: any, res: any) => {
 });
 
 app.post('/api/batch/add-frame', (req: any, res: any) => {
-    const { url, role } = req.body; // role: 'first' | 'last'
+    const { url, role } = req.body; // role: 'first' | 'last' | 'middle'
     if (!url || !role) return res.status(400).json({ error: 'url and role required' });
+    if (!['first', 'last', 'middle'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
 
     try {
+        const parseMiddleUrls = (raw: unknown): string[] => {
+            if (!raw || typeof raw !== 'string') return [];
+            try {
+                const parsed = JSON.parse(raw);
+                return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+            } catch {
+                return [];
+            }
+        };
+
+        if (role === 'middle') {
+            const existingRow = db.prepare(`
+                SELECT id, middle_frame_urls
+                FROM batch_tasks
+                WHERE status IN ('pending', 'failed')
+                ORDER BY created_at DESC
+                LIMIT 1
+            `).get() as { id: string; middle_frame_urls?: string } | undefined;
+
+            if (existingRow) {
+                const currentMiddleUrls = parseMiddleUrls(existingRow.middle_frame_urls);
+                const updatedMiddleUrls = [...currentMiddleUrls, url];
+                db.prepare('UPDATE batch_tasks SET middle_frame_urls = ? WHERE id = ?').run(JSON.stringify(updatedMiddleUrls), existingRow.id);
+                const updated = db.prepare('SELECT * FROM batch_tasks WHERE id = ?').get(existingRow.id) as any;
+                updated.audio_enabled = !!updated.audio_enabled;
+                updated.middle_frame_urls = parseMiddleUrls(updated.middle_frame_urls);
+                io.emit('batch:update', updated);
+                return res.json(updated);
+            }
+
+            const id = crypto.randomUUID();
+            db.prepare('INSERT INTO batch_tasks (id, middle_frame_urls, aspect_ratio, model_name, mode) VALUES (?, ?, ?, ?, ?)').run(
+                id,
+                JSON.stringify([url]),
+                '16:9',
+                'kling-v3',
+                'pro'
+            );
+            const newTask = {
+                id,
+                first_frame_url: null,
+                last_frame_url: null,
+                middle_frame_urls: [url],
+                prompt: '',
+                duration: 5,
+                audio_enabled: false,
+                aspect_ratio: '16:9',
+                model_name: 'kling-v3',
+                mode: 'pro',
+                status: 'pending',
+                created_at: new Date().toISOString()
+            };
+            io.emit('batch:add', newTask);
+            return res.json(newTask);
+        }
+
         const id = crypto.randomUUID();
-        // 1. Try to find an existing row where the OTHER frame is missing
         const columnToCheck = role === 'first' ? 'last_frame_url' : 'first_frame_url';
         const columnToFill = role === 'first' ? 'first_frame_url' : 'last_frame_url';
 
@@ -932,34 +997,55 @@ app.post('/api/batch/add-frame', (req: any, res: any) => {
             db.prepare(`UPDATE batch_tasks SET ${columnToFill} = ? WHERE id = ?`).run(url, existingRow.id);
             const updated = db.prepare('SELECT * FROM batch_tasks WHERE id = ?').get(existingRow.id) as any;
             updated.audio_enabled = !!updated.audio_enabled;
+            updated.middle_frame_urls = parseMiddleUrls(updated.middle_frame_urls);
             io.emit('batch:update', updated);
-            res.json(updated);
-        } else {
-            // 2. Create a new row
-            db.prepare(`INSERT INTO batch_tasks (id, ${columnToFill}, aspect_ratio, model_name, mode) VALUES (?, ?, ?, ?, ?)`).run(id, url, '16:9', 'kling-v2-6', 'pro');
-            const newTask = {
-                id,
-                [columnToFill]: url,
-                [columnToCheck]: null,
-                prompt: '',
-                duration: 5,
-                audio_enabled: false,
-                aspect_ratio: '16:9',
-                model_name: 'kling-v2-6',
-                mode: 'pro',
-                status: 'pending',
-                created_at: new Date().toISOString()
-            };
-            io.emit('batch:add', newTask);
-            res.json(newTask);
+            return res.json(updated);
         }
+
+        const middleOnlyRow = db.prepare(`
+            SELECT id FROM batch_tasks
+            WHERE first_frame_url IS NULL
+              AND last_frame_url IS NULL
+              AND middle_frame_urls IS NOT NULL
+              AND middle_frame_urls != '[]'
+              AND status IN ('pending', 'failed')
+            ORDER BY created_at DESC
+            LIMIT 1
+        `).get() as { id: string } | undefined;
+
+        if (middleOnlyRow) {
+            db.prepare(`UPDATE batch_tasks SET ${columnToFill} = ? WHERE id = ?`).run(url, middleOnlyRow.id);
+            const updated = db.prepare('SELECT * FROM batch_tasks WHERE id = ?').get(middleOnlyRow.id) as any;
+            updated.audio_enabled = !!updated.audio_enabled;
+            updated.middle_frame_urls = parseMiddleUrls(updated.middle_frame_urls);
+            io.emit('batch:update', updated);
+            return res.json(updated);
+        }
+
+        db.prepare(`INSERT INTO batch_tasks (id, ${columnToFill}, aspect_ratio, model_name, mode) VALUES (?, ?, ?, ?, ?)`).run(id, url, '16:9', 'kling-v3', 'pro');
+        const newTask = {
+            id,
+            [columnToFill]: url,
+            [columnToCheck]: null,
+            middle_frame_urls: [],
+            prompt: '',
+            duration: 5,
+            audio_enabled: false,
+            aspect_ratio: '16:9',
+            model_name: 'kling-v3',
+            mode: 'pro',
+            status: 'pending',
+            created_at: new Date().toISOString()
+        };
+        io.emit('batch:add', newTask);
+        res.json(newTask);
     } catch (err: any) {
         res.status(500).json({ error: err.message });
     }
 });
 
 app.patch('/api/batch/tasks/:id', (req: any, res: any) => {
-    const { prompt, duration, audio_enabled, aspect_ratio, status, model_name, mode, cfg_scale, negative_prompt } = req.body;
+    const { prompt, duration, audio_enabled, aspect_ratio, status, model_name, mode, cfg_scale, negative_prompt, middle_frame_urls } = req.body;
     const updates: string[] = [];
     const values: any[] = [];
 
@@ -972,6 +1058,7 @@ app.patch('/api/batch/tasks/:id', (req: any, res: any) => {
     if (mode !== undefined) { updates.push('mode = ?'); values.push(mode); }
     if (cfg_scale !== undefined) { updates.push('cfg_scale = ?'); values.push(cfg_scale); }
     if (negative_prompt !== undefined) { updates.push('negative_prompt = ?'); values.push(negative_prompt); }
+    if (middle_frame_urls !== undefined) { updates.push('middle_frame_urls = ?'); values.push(JSON.stringify(Array.isArray(middle_frame_urls) ? middle_frame_urls : [])); }
 
     if (updates.length === 0) return res.status(400).json({ error: 'No fields to update' });
 
@@ -980,6 +1067,15 @@ app.patch('/api/batch/tasks/:id', (req: any, res: any) => {
         const updated = db.prepare('SELECT * FROM batch_tasks WHERE id = ?').get(req.params.id) as any;
         updated.audio_enabled = !!updated.audio_enabled;
         updated.aspect_ratio = updated.aspect_ratio || '16:9';
+        updated.middle_frame_urls = (() => {
+            if (!updated.middle_frame_urls) return [];
+            try {
+                const parsed = JSON.parse(updated.middle_frame_urls);
+                return Array.isArray(parsed) ? parsed : [];
+            } catch {
+                return [];
+            }
+        })();
         io.emit('batch:update', updated);
         res.json(updated);
     } catch (err: any) {
@@ -1002,7 +1098,7 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
     console.log(`🔍 [Batch] Total tasks in DB: ${allTasks.length}`);
     allTasks.forEach(t => console.log(`   - Task ${t.id}: status=${t.status}, first=${t.first_frame_url}, last=${t.last_frame_url}`));
 
-    const tasks = db.prepare("SELECT * FROM batch_tasks WHERE status IN ('pending', 'failed') AND (first_frame_url IS NOT NULL OR last_frame_url IS NOT NULL)").all() as any[];
+    const tasks = db.prepare("SELECT * FROM batch_tasks WHERE status IN ('pending', 'failed') AND (first_frame_url IS NOT NULL OR last_frame_url IS NOT NULL OR (middle_frame_urls IS NOT NULL AND middle_frame_urls != '[]'))").all() as any[];
     console.log(`🔍 [Batch] Pending tasks found: ${tasks.length}`);
 
     if (tasks.length === 0) return res.status(400).json({ error: 'No pending tasks with at least one frame' });
@@ -1057,6 +1153,15 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
 
             const firstFrame = getPublicUrl(task.first_frame_url);
             const lastFrame = getPublicUrl(task.last_frame_url);
+            const middleFrames = (() => {
+                if (!task.middle_frame_urls) return [];
+                try {
+                    const parsed = JSON.parse(task.middle_frame_urls);
+                    return Array.isArray(parsed) ? parsed.map((url: string) => getPublicUrl(url)).filter((url: unknown): url is string => typeof url === 'string') : [];
+                } catch {
+                    return [];
+                }
+            })();
 
             if (!firstFrame) {
                 console.error(`❌ [Kling] Task ${task.id} missing start image URL, skipping`);
@@ -1068,13 +1173,15 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
             // Map DB fields to KlingTaskOptions - respecting exactOptionalPropertyTypes
             const options = {
                 image: firstFrame, // Guaranteed string now
-                duration: (task.duration === 10 ? '10' : '5') as '5' | '10',
+                duration: ([5, 10, 15].includes(task.duration) ? String(task.duration) : '5') as '5' | '10' | '15',
                 ...(task.prompt ? { prompt: task.prompt } : { prompt: "Cinematic high quality video" }),
                 ...(lastFrame ? { image_tail: lastFrame } : {}),
+                ...(middleFrames.length ? { middle_images: middleFrames } : {}),
                 ...(task.mode ? { mode: task.mode as 'std' | 'pro' } : { mode: 'pro' as const }),
-                ...(task.model_name ? { model_name: task.model_name as string } : { model_name: 'kling-v1' }),
+                ...(task.model_name ? { model_name: task.model_name as string } : { model_name: 'kling-v3' }),
                 ...(task.cfg_scale ? { cfg_scale: Number(task.cfg_scale) } : { cfg_scale: 0.5 }),
-                ...(task.negative_prompt ? { negative_prompt: task.negative_prompt } : {})
+                ...(task.negative_prompt ? { negative_prompt: task.negative_prompt } : {}),
+                sound: !!task.audio_enabled
             };
 
             await KlingImageToVideoService.generate(
@@ -1155,7 +1262,16 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
                     io.emit('batch:update', {
                         ...task,
                         ...updates,
-                        audio_enabled: !!task.audio_enabled
+                        audio_enabled: !!task.audio_enabled,
+                        middle_frame_urls: (() => {
+                            if (!task.middle_frame_urls) return [];
+                            try {
+                                const parsed = JSON.parse(task.middle_frame_urls);
+                                return Array.isArray(parsed) ? parsed : [];
+                            } catch {
+                                return [];
+                            }
+                        })()
                     });
                 }
             );
@@ -1164,7 +1280,20 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
         } catch (err) {
             console.error(`❌ [Kling] Error processing batch task ${task.id}:`, err);
             db.prepare("UPDATE batch_tasks SET status = 'failed' WHERE id = ?").run(task.id);
-            io.emit('batch:update', { ...task, status: 'failed', audio_enabled: !!task.audio_enabled });
+            io.emit('batch:update', {
+                ...task,
+                status: 'failed',
+                audio_enabled: !!task.audio_enabled,
+                middle_frame_urls: (() => {
+                    if (!task.middle_frame_urls) return [];
+                    try {
+                        const parsed = JSON.parse(task.middle_frame_urls);
+                        return Array.isArray(parsed) ? parsed : [];
+                    } catch {
+                        return [];
+                    }
+                })()
+            });
         }
     }
 });
@@ -1327,4 +1456,3 @@ const PORT = Number(process.env.PORT) || 5000;
 httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
 });
-

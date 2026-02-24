@@ -10,7 +10,7 @@ export interface KlingConfig {
     klingSecretKey?: string;
 }
 
-export type KlingModel = 'kling-v1' | 'kling-v1-5' | 'kling-v1-6' | 'kling-v2-master' | 'kling-v2-1' | 'kling-v2-5-turbo' | 'kling-v2-6';
+export type KlingModel = 'kling-v1' | 'kling-v1-5' | 'kling-v1-6' | 'kling-v2-master' | 'kling-v2-1' | 'kling-v2-5-turbo' | 'kling-v2-6' | 'kling-v3';
 export type KlingMode = 'std' | 'pro';
 export type CameraControlType = 'simple' | 'down_back' | 'forward_up' | 'right_turn_forward' | 'left_turn_forward';
 
@@ -33,13 +33,16 @@ export interface KlingTaskOptions {
     negative_prompt?: string;
     image?: string;
     image_tail?: string;
+    middle_images?: string[];
     model_name?: KlingModel;
     mode?: KlingMode;
-    duration?: '5' | '10';
+    duration?: '5' | '10' | '15';
     sound?: boolean; // Only for v2.6+
     cfg_scale?: number;
     aspect_ratio?: string; // Not in new spec? Double check. Spec says image dimensions matter. Removed from top level if unused, but kept for compatibility if needed. Actually spec says "aspect ratio of the image should be...", user sends image. If generating from text-only, ratio might matter, but this is image2video.
     camera_control?: CameraControl;
+    callback_url?: string;
+    external_task_id?: string;
 }
 
 export class KlingService {
@@ -84,8 +87,8 @@ export class KlingService {
 
         // Construct Payload
         const payload: any = {
-            model_name: options.model_name || 'kling-v1',
-            mode: options.mode || 'std',
+            model_name: options.model_name || 'kling-v3',
+            mode: options.mode || 'pro',
             duration: options.duration || '5',
             image: options.image, // Required
         };
@@ -93,8 +96,18 @@ export class KlingService {
         if (options.prompt) payload.prompt = options.prompt;
         if (options.negative_prompt) payload.negative_prompt = options.negative_prompt;
         if (options.image_tail) payload.image_tail = options.image_tail;
+        if (options.middle_images?.length) payload.middle_images = options.middle_images;
         if (options.cfg_scale !== undefined) payload.cfg_scale = options.cfg_scale;
         if (options.camera_control) payload.camera_control = options.camera_control;
+        if (options.callback_url !== undefined) payload.callback_url = options.callback_url;
+        if (options.external_task_id !== undefined) payload.external_task_id = options.external_task_id;
+
+        if ((options.model_name || 'kling-v3') === 'kling-v3') {
+            payload.multi_shot = options.middle_images?.length ? 'true' : 'false';
+            if (options.middle_images?.length) {
+                payload.shot_type = 'customize';
+            }
+        }
 
         // Sound is only for v2.6+
         if (options.model_name?.includes('2-6') && options.sound !== undefined) {
@@ -245,23 +258,27 @@ export class KlingImageToVideoService {
         params: {
             image?: string;
             image_tail?: string;
+            middle_images?: string[];
             prompt?: string;
-            duration?: '5' | '10';
+            duration?: '5' | '10' | '15';
             model_name?: string;
             mode?: 'std' | 'pro';
             cfg_scale?: number;
             negative_prompt?: string;
+            sound?: boolean;
+            callback_url?: string;
+            external_task_id?: string;
         }
     ): Promise<string> {
         const payload: any = {
-            model_name: params.model_name || 'kling-v1',
+            model_name: params.model_name || 'kling-v3',
             mode: params.mode || 'pro',
             duration: params.duration || '5'
         };
 
-        if (params.prompt) payload.prompt = params.prompt;
+        payload.prompt = params.prompt || '';
         if (params.cfg_scale) payload.cfg_scale = params.cfg_scale;
-        if (params.negative_prompt) payload.negative_prompt = params.negative_prompt;
+        payload.negative_prompt = params.negative_prompt || '';
 
         const resolveImage = async (rawUrl: string): Promise<string> => {
             if (!rawUrl) return rawUrl;
@@ -309,6 +326,31 @@ export class KlingImageToVideoService {
 
         if (params.image) payload.image = await resolveImage(params.image);
         if (params.image_tail) payload.image_tail = await resolveImage(params.image_tail);
+        if (params.middle_images?.length) {
+            payload.middle_images = await Promise.all(params.middle_images.map(resolveImage));
+        }
+
+        if ((params.model_name || 'kling-v3') === 'kling-v3') {
+            const durationValue = Number(params.duration || '5');
+            const middleCount = params.middle_images?.length || 0;
+            const totalShots = Math.max(1, middleCount + 1);
+            const base = Math.max(1, Math.floor(durationValue / totalShots));
+            const remainder = Math.max(0, durationValue - (base * totalShots));
+            const multiPrompt = Array.from({ length: totalShots }, (_, idx) => ({
+                index: idx + 1,
+                prompt: params.prompt || '',
+                duration: String(base + (idx < remainder ? 1 : 0))
+            }));
+
+            payload.multi_shot = middleCount > 0 ? 'true' : 'false';
+            if (middleCount > 0) {
+                payload.shot_type = 'customize';
+                payload.multi_prompt = multiPrompt;
+            }
+            payload.sound = params.sound ? 'on' : 'off';
+            payload.callback_url = params.callback_url ?? '';
+            payload.external_task_id = params.external_task_id ?? '';
+        }
 
         console.log(`📡 [Kling I2V] Creating task`, JSON.stringify(payload, null, 2));
 
@@ -354,12 +396,16 @@ export class KlingImageToVideoService {
         params: {
             image?: string;
             image_tail?: string;
+            middle_images?: string[];
             prompt?: string;
-            duration?: '5' | '10';
+            duration?: '5' | '10' | '15';
             model_name?: string;
             mode?: 'std' | 'pro';
             cfg_scale?: number;
             negative_prompt?: string;
+            sound?: boolean;
+            callback_url?: string;
+            external_task_id?: string;
         },
         onStatusUpdate?: (status: string, videoUrl?: string) => void | Promise<void>
     ): Promise<string> {
@@ -402,4 +448,3 @@ export class KlingImageToVideoService {
         }
     }
 }
-

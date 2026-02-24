@@ -38,6 +38,7 @@ db.exec(`
     id TEXT PRIMARY KEY,
     first_frame_url TEXT,
     last_frame_url TEXT,
+    middle_frame_urls TEXT DEFAULT '[]',
     prompt TEXT,
     duration INTEGER DEFAULT 5,
     audio_enabled INTEGER DEFAULT 0,
@@ -45,7 +46,7 @@ db.exec(`
     aspect_ratio TEXT DEFAULT '16:9',
     generated_video_url TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    model_name TEXT DEFAULT 'kling-v1',
+    model_name TEXT DEFAULT 'kling-v3',
     mode TEXT DEFAULT 'std',
     cfg_scale REAL DEFAULT 0.5,
     negative_prompt TEXT
@@ -65,7 +66,7 @@ try {
 }
 
 try {
-  db.exec("ALTER TABLE batch_tasks ADD COLUMN model_name TEXT DEFAULT 'kling-v2-6'");
+  db.exec("ALTER TABLE batch_tasks ADD COLUMN model_name TEXT DEFAULT 'kling-v3'");
 } catch (e) { }
 try {
   db.exec("ALTER TABLE batch_tasks ADD COLUMN mode TEXT DEFAULT 'pro'");
@@ -75,6 +76,9 @@ try {
 } catch (e) { }
 try {
   db.exec("ALTER TABLE batch_tasks ADD COLUMN negative_prompt TEXT");
+} catch (e) { }
+try {
+  db.exec("ALTER TABLE batch_tasks ADD COLUMN middle_frame_urls TEXT DEFAULT '[]'");
 } catch (e) { }
 
 try {

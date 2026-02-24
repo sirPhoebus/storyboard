@@ -1307,7 +1307,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     };
 
 
-    const handleSendToBatch = (elementId: string, role: 'first' | 'last') => {
+    const handleSendToBatch = (elementId: string, role: 'first' | 'last' | 'middle') => {
         const el = elements.find(item => item.id === elementId);
         if (!el || !el.url) return;
 
@@ -1393,6 +1393,14 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                         onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
                     >
                         Send as last frame
+                    </div>
+                    <div
+                        onClick={() => handleSendToBatch(contextMenu.elementId, 'middle')}
+                        style={{ padding: '8px 16px', color: 'white', cursor: 'pointer', fontSize: '13px' }}
+                        onMouseOver={(e) => (e.currentTarget.style.background = '#34495e')}
+                        onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
+                    >
+                        add a middle image
                     </div>
                     <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
                     <div

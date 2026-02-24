@@ -54,6 +54,7 @@ export interface BatchTask {
     id: string;
     first_frame_url?: string;
     last_frame_url?: string;
+    middle_frame_urls?: string[];
     prompt: string;
     duration: number;
     audio_enabled: boolean;

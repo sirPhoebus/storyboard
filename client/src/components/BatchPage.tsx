@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Socket } from 'socket.io-client';
 import { API_BASE_URL } from '../config';
 import type { BatchTask } from '../types';
@@ -27,6 +27,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
     const [prompts, setPrompts] = useState<PromptCategory[]>([]);
     const [promptsPanelOpen, setPromptsPanelOpen] = useState(true);
     const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+    const middleImageInputsRef = useRef<Record<string, HTMLInputElement | null>>({});
 
     useEffect(() => {
         fetch(`${API_BASE_URL}/api/batch/tasks`)
@@ -102,6 +103,38 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
         }
     };
 
+    const toAbsoluteUrl = (url: string) => (url.startsWith('http') ? url : `${API_BASE_URL}${url}`);
+
+    const handleUploadMiddleImages = async (taskId: string, files: FileList | null) => {
+        if (!files || files.length === 0) return;
+
+        const task = tasks.find(t => t.id === taskId);
+        if (!task) return;
+
+        const uploadedUrls: string[] = [];
+        for (const file of Array.from(files)) {
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('projectId', 'default-project');
+
+            const res = await fetch(`${API_BASE_URL}/api/upload`, {
+                method: 'POST',
+                body: formData
+            });
+            if (!res.ok) {
+                console.error('Failed to upload middle image:', file.name);
+                continue;
+            }
+            const data = await res.json() as { url?: string };
+            if (data.url) uploadedUrls.push(data.url);
+        }
+
+        if (uploadedUrls.length === 0) return;
+
+        const nextMiddleUrls = [...(task.middle_frame_urls || []), ...uploadedUrls];
+        handleUpdateTask(taskId, { middle_frame_urls: nextMiddleUrls });
+    };
+
     if (loading) return <div style={{ color: 'white', padding: '40px' }}>Loading tasks...</div>;
 
     return (
@@ -159,18 +192,61 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                         <div style={{ display: 'flex', gap: '8px' }}>
                                             <div style={{ width: '120px', height: '70px', borderRadius: '8px', overflow: 'hidden', background: '#222', border: '1px solid rgba(255,255,255,0.05)', position: 'relative' }}>
                                                 {task.first_frame_url ? (
-                                                    <img src={`${task.first_frame_url.startsWith('http') ? '' : API_BASE_URL}${task.first_frame_url}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="First frame" />
+                                                    <img src={toAbsoluteUrl(task.first_frame_url)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="First frame" />
                                                 ) : (
                                                     <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#444' }}>FIRST FRAME</div>
                                                 )}
                                             </div>
                                             <div style={{ width: '120px', height: '70px', borderRadius: '8px', overflow: 'hidden', background: '#222', border: '1px solid rgba(255,255,255,0.05)', position: 'relative' }}>
                                                 {task.last_frame_url ? (
-                                                    <img src={`${task.last_frame_url.startsWith('http') ? '' : API_BASE_URL}${task.last_frame_url}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="Last frame" />
+                                                    <img src={toAbsoluteUrl(task.last_frame_url)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="Last frame" />
                                                 ) : (
                                                     <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#444' }}>LAST FRAME</div>
                                                 )}
                                             </div>
+                                        </div>
+                                        <div style={{ width: '248px', minHeight: '70px', borderRadius: '8px', background: '#1a1a1a', border: '1px dashed rgba(255,255,255,0.12)', padding: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <span style={{ fontSize: '10px', color: '#777', textTransform: 'uppercase', fontWeight: 700 }}>Middle Images</span>
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        middleImageInputsRef.current[task.id]?.click();
+                                                    }}
+                                                    style={{ border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: '#bbb', borderRadius: '4px', padding: '2px 6px', fontSize: '10px', cursor: 'pointer' }}
+                                                >
+                                                    Upload
+                                                </button>
+                                                <input
+                                                    ref={(el) => { middleImageInputsRef.current[task.id] = el; }}
+                                                    type="file"
+                                                    accept="image/*"
+                                                    multiple
+                                                    style={{ display: 'none' }}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    onChange={(e) => {
+                                                        e.stopPropagation();
+                                                        handleUploadMiddleImages(task.id, e.target.files).catch(err => console.error('Failed middle image upload:', err));
+                                                        e.currentTarget.value = '';
+                                                    }}
+                                                />
+                                            </div>
+                                            {(task.middle_frame_urls && task.middle_frame_urls.length > 0) ? (
+                                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                                    {task.middle_frame_urls.map((url, idx) => (
+                                                        <img
+                                                            key={`${task.id}-middle-${idx}-${url}`}
+                                                            src={toAbsoluteUrl(url)}
+                                                            alt={`Middle ${idx + 1}`}
+                                                            style={{ width: '56px', height: '40px', objectFit: 'cover', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.08)' }}
+                                                        />
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <div style={{ minHeight: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#444' }}>
+                                                    Empty placeholder
+                                                </div>
+                                            )}
                                         </div>
                                         <div style={{
                                             fontSize: '11px',
@@ -237,7 +313,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                         <label style={{ fontSize: '10px', color: '#666', fontWeight: 600, textTransform: 'uppercase' }}>Model</label>
                                         <select
-                                            value={task.model_name || 'kling-v2-6'}
+                                            value={task.model_name || 'kling-v3'}
                                             onChange={(e) => handleUpdateTask(task.id, { model_name: e.target.value })}
                                             style={{
                                                 background: '#1a1a1a',
@@ -249,6 +325,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                                 outline: 'none'
                                             }}
                                         >
+                                            <option value="kling-v3">v3.0 (RECOMMENDED)</option>
                                             <option value="kling-v1">v1.0</option>
                                             <option value="kling-v1-5">v1.5</option>
                                             <option value="kling-v1-6">v1.6</option>
@@ -281,7 +358,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                                         <label style={{ fontSize: '10px', color: '#666', fontWeight: 600, textTransform: 'uppercase' }}>Duration</label>
                                         <div style={{ display: 'flex', background: 'rgba(0,0,0,0.2)', padding: '2px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.05)' }}>
-                                            {[5, 10].map(d => (
+                                            {[5, 10, 15].map(d => (
                                                 <button
                                                     key={d}
                                                     onClick={(e) => { e.stopPropagation(); handleUpdateTask(task.id, { duration: d as any }); }}
