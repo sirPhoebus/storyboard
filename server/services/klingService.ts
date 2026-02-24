@@ -46,6 +46,57 @@ export interface KlingTaskOptions {
     external_task_id?: string;
 }
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const isRetryableError = (err: unknown): boolean => {
+    if (!err || typeof err !== 'object') return false;
+    const message = String((err as Error).message || '').toLowerCase();
+    return (
+        message.includes('fetch failed') ||
+        message.includes('connect timeout') ||
+        message.includes('timed out') ||
+        message.includes('aborted') ||
+        message.includes('econnreset') ||
+        message.includes('enotfound') ||
+        message.includes('eai_again')
+    );
+};
+
+const fetchWithRetry = async (
+    url: string,
+    init: RequestInit,
+    opts?: { retries?: number; retryDelayMs?: number; timeoutMs?: number }
+): Promise<Response> => {
+    const retries = opts?.retries ?? 4;
+    const retryDelayMs = opts?.retryDelayMs ?? 2000;
+    const timeoutMs = opts?.timeoutMs ?? 30000;
+
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+            const response = await fetch(url, { ...init, signal: controller.signal });
+            clearTimeout(timer);
+            if (response.ok) return response;
+
+            if ((response.status >= 500 || response.status === 429) && attempt < retries) {
+                await sleep(retryDelayMs * (attempt + 1));
+                continue;
+            }
+            return response;
+        } catch (err) {
+            clearTimeout(timer);
+            if (attempt < retries && isRetryableError(err)) {
+                await sleep(retryDelayMs * (attempt + 1));
+                continue;
+            }
+            throw err;
+        }
+    }
+
+    throw new Error('Exhausted retries');
+};
+
 export class KlingService {
     // API URL updated to v1 endpoint
     private static get API_BASE_URL(): string {
@@ -118,11 +169,11 @@ export class KlingService {
         console.log(`📡 [Kling] Creating task...`);
         console.log(`📦 [Kling] Payload: ${JSON.stringify(payload, null, 2)}`);
 
-        const response = await fetch(this.API_BASE_URL, {
+        const response = await fetchWithRetry(this.API_BASE_URL, {
             method: 'POST',
             headers: this.getHeaders(config),
             body: JSON.stringify(payload)
-        });
+        }, { retries: 3, timeoutMs: 30000 });
 
         if (!response.ok) {
             const errorText = await response.text();
@@ -138,10 +189,10 @@ export class KlingService {
     }
 
     static async checkTaskStatus(config: KlingConfig, taskId: string): Promise<any> {
-        const response = await fetch(`${this.API_BASE_URL}/${taskId}`, {
+        const response = await fetchWithRetry(`${this.API_BASE_URL}/${taskId}`, {
             method: 'GET',
             headers: this.getHeaders(config)
-        });
+        }, { retries: 4, timeoutMs: 30000 });
 
         if (!response.ok) {
             throw new Error(`Failed to check status: ${response.statusText}`);
@@ -170,7 +221,7 @@ export class KlingService {
 
             // 2. Poll for Status
             let attempts = 0;
-            const maxAttempts = 120; // 10 minutes (5s * 120)
+            const maxAttempts = 360; // 30 minutes (5s * 360)
 
             while (attempts < maxAttempts) {
                 await new Promise(resolve => setTimeout(resolve, 5000));
@@ -303,7 +354,7 @@ export class KlingImageToVideoService {
             }
 
             // 3. Fallback: Convert to Base64
-            console.warn(`⚠️ STORYBOARD_BASE_URL not set for relative path ${rawUrl}, attempting Base64 conversion...`);
+            console.log(`ℹ️ STORYBOARD_BASE_URL not set for relative path ${rawUrl}, using Base64 fallback for Kling upload.`);
             
             try {
                 const dataDir = process.env.DATA_DIR || process.cwd();
@@ -369,11 +420,11 @@ export class KlingImageToVideoService {
 
         console.log(`📡 [Kling I2V] Creating task`, JSON.stringify(payload, null, 2));
 
-        const response = await fetch(this.API_URL, {
+        const response = await fetchWithRetry(this.API_URL, {
             method: 'POST',
             headers: this.getHeaders(config),
             body: JSON.stringify(payload)
-        });
+        }, { retries: 3, timeoutMs: 30000 });
 
         if (!response.ok) {
             const errorText = await response.text();
@@ -389,10 +440,10 @@ export class KlingImageToVideoService {
     }
 
     static async checkStatus(config: KlingConfig, taskId: string): Promise<any> {
-        const response = await fetch(`${this.API_URL}/${taskId}`, {
+        const response = await fetchWithRetry(`${this.API_URL}/${taskId}`, {
             method: 'GET',
             headers: this.getHeaders(config)
-        });
+        }, { retries: 4, timeoutMs: 30000 });
 
         if (!response.ok) {
             throw new Error(`Failed to check I2V status: ${response.statusText}`);
@@ -431,7 +482,7 @@ export class KlingImageToVideoService {
             if (onStatusUpdate) await onStatusUpdate('generating');
 
             let attempts = 0;
-            const maxAttempts = 120;
+            const maxAttempts = 360;
 
             while (attempts < maxAttempts) {
                 await new Promise(resolve => setTimeout(resolve, 5000));

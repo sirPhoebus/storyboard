@@ -1200,7 +1200,8 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
                 if (!localUrl.startsWith('http')) {
                     const baseUrl = process.env.STORYBOARD_BASE_URL;
                     if (!baseUrl) {
-                        console.warn('⚠️ STORYBOARD_BASE_URL not set, passing relative URL to API might fail');
+                        // Relative URL is intentionally allowed here.
+                        // Kling service will convert relative local files to Base64 if no public base URL is configured.
                         return localUrl;
                     }
                     const cleanPath = localUrl.startsWith('/') ? localUrl : `/${localUrl}`;
@@ -1216,14 +1217,23 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
                 return finalUrl;
             };
 
-            const firstFrame = getPublicUrl(task.first_frame_url);
+            let firstFrame = getPublicUrl(task.first_frame_url);
             const lastFrame = getPublicUrl(task.last_frame_url);
-            const multiPromptItems = parseMultiPromptItems(task.multi_prompt_items, task.middle_frame_urls)
+            let multiPromptItems = parseMultiPromptItems(task.multi_prompt_items, task.middle_frame_urls)
                 .map((item) => {
                     const resolved = getPublicUrl(item.url);
                     return resolved ? { ...item, url: resolved } : null;
                 })
                 .filter((item): item is { url: string; prompt: string; duration: string } => item !== null);
+
+            // Recovery path: if no explicit first frame exists, use the first multi-prompt image as the starting image.
+            if (!firstFrame && multiPromptItems.length > 0) {
+                const fallbackFirst = multiPromptItems[0];
+                if (fallbackFirst) {
+                    firstFrame = fallbackFirst.url;
+                    multiPromptItems = multiPromptItems.slice(1);
+                }
+            }
 
             if (!firstFrame) {
                 console.error(`❌ [Kling] Task ${task.id} missing start image URL, skipping`);

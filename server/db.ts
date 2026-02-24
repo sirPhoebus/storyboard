@@ -50,7 +50,8 @@ db.exec(`
     model_name TEXT DEFAULT 'kling-v3',
     mode TEXT DEFAULT 'std',
     cfg_scale REAL DEFAULT 0.5,
-    negative_prompt TEXT
+    negative_prompt TEXT,
+    error TEXT
   );
 `);
 
@@ -83,6 +84,9 @@ try {
 } catch (e) { }
 try {
   db.exec("ALTER TABLE batch_tasks ADD COLUMN multi_prompt_items TEXT DEFAULT '[]'");
+} catch (e) { }
+try {
+  db.exec("ALTER TABLE batch_tasks ADD COLUMN error TEXT");
 } catch (e) { }
 
 try {
