@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Socket } from 'socket.io-client';
 import { API_BASE_URL } from '../config';
 import type { BatchTask } from '../types';
-import { Play, Trash2, Volume2, VolumeX, ChevronLeft, Hourglass, Download, ChevronRight } from 'lucide-react';
+import { Play, Trash2, Volume2, VolumeX, ChevronLeft, Hourglass, Download, ChevronRight, RefreshCw } from 'lucide-react';
 
 interface PromptMove {
     id: string;
@@ -92,12 +92,17 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
         fetch(`${API_BASE_URL}/api/batch/tasks/${id}`, { method: 'DELETE' });
     };
 
-    const handleGenerateAll = () => {
-        const invalidDurationTask = tasks.find((task) => getMultiPromptDuration(task) > 15);
-        if (invalidDurationTask) {
-            alert('One or more multi_prompt tasks exceed 15 seconds total. Please reduce durations before generating.');
+    const handleFetchVideoByTaskId = async (id: string) => {
+        const res = await fetch(`${API_BASE_URL}/api/batch/tasks/${id}/fetch-video`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) {
+            alert(data.error || 'Could not fetch video by task ID yet.');
             return;
         }
+        setTasks(prev => prev.map(t => t.id === id ? data : t));
+    };
+
+    const handleGenerateAll = () => {
         fetch(`${API_BASE_URL}/api/batch/generate`, { method: 'POST' })
             .catch(err => console.error('Failed to start generation:', err));
     };
@@ -109,12 +114,6 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
     };
 
     const toAbsoluteUrl = (url: string) => (url.startsWith('http') ? url : `${API_BASE_URL}${url}`);
-    const parseDuration = (value: string) => {
-        const parsed = Number.parseFloat(value.trim());
-        return Number.isFinite(parsed) ? parsed : 0;
-    };
-    const getMultiPromptDuration = (task: BatchTask) => (task.multi_prompt_items || [])
-        .reduce((sum, item) => sum + parseDuration(item.duration || ''), 0);
 
     const updateMultiPromptItem = (task: BatchTask, index: number, updates: Partial<{ prompt: string; duration: string }>) => {
         const items = [...(task.multi_prompt_items || [])];
@@ -314,13 +313,16 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                                                 value={item.duration || ''}
                                                                 onClick={(e) => e.stopPropagation()}
                                                                 onChange={(e) => updateMultiPromptItem(task, idx, { duration: e.target.value })}
-                                                                placeholder="Duration (free text, e.g. 2.5)"
+                                                                placeholder="Timing weight (optional, e.g. 2)"
                                                                 style={{ width: '100%', fontSize: '11px', background: 'rgba(0,0,0,0.25)', color: '#eee', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '6px', outline: 'none' }}
                                                             />
                                                         </div>
                                                     ))}
-                                                    <div style={{ fontSize: '10px', color: getMultiPromptDuration(task) > 15 ? '#e67e22' : '#666' }}>
-                                                        Total multi_prompt duration: {getMultiPromptDuration(task).toFixed(2)}s {getMultiPromptDuration(task) > 15 ? '(max 15s exceeded)' : ''}
+                                                    <div style={{ fontSize: '10px', color: '#666' }}>
+                                                        Multi_prompt timing: auto-normalized to exact total duration ({task.duration}s).
+                                                    </div>
+                                                    <div style={{ fontSize: '10px', color: '#666' }}>
+                                                        Tip: optional values are treated as relative weights, not strict seconds.
                                                     </div>
                                                     {task.last_frame_url && (
                                                         <div style={{ fontSize: '10px', color: '#e67e22' }}>
@@ -526,11 +528,30 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                             <Hourglass size={16} />
                                         </div>
                                     )}
+                                    {task.status === 'failed' && task.kling_task_id && (
+                                        <div style={{ fontSize: '10px', color: '#888' }}>
+                                            Task ID: {task.kling_task_id}
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 
                             {/* Actions */}
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                {task.status === 'failed' && task.kling_task_id && (
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleFetchVideoByTaskId(task.id).catch(err => console.error('Failed to fetch video by task id:', err));
+                                        }}
+                                        style={{ background: 'transparent', border: 'none', color: '#e67e22', cursor: 'pointer', padding: '10px', borderRadius: '12px', transition: 'all 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                        onMouseOver={(e) => (e.currentTarget.style.color = '#f39c12')}
+                                        onMouseOut={(e) => (e.currentTarget.style.color = '#e67e22')}
+                                        title={`Try fetching video from Kling task ID ${task.kling_task_id}`}
+                                    >
+                                        <RefreshCw size={22} />
+                                    </button>
+                                )}
                                 {task.generated_video_url && task.status === 'completed' && (
                                     <a
                                         href={`${API_BASE_URL}${task.generated_video_url}`}

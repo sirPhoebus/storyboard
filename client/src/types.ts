@@ -62,6 +62,7 @@ export interface BatchTask {
     aspect_ratio: '16:9' | '9:16' | '1:1' | '21:9';
     status: 'pending' | 'generating' | 'completed' | 'failed';
     generated_video_url?: string;
+    kling_task_id?: string;
     created_at: string;
     model_name: string;
     mode: 'std' | 'pro';

@@ -46,6 +46,7 @@ db.exec(`
     status TEXT DEFAULT 'pending',
     aspect_ratio TEXT DEFAULT '16:9',
     generated_video_url TEXT,
+    kling_task_id TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     model_name TEXT DEFAULT 'kling-v3',
     mode TEXT DEFAULT 'std',
@@ -66,6 +67,9 @@ try {
 } catch (e) {
   // Column already exists
 }
+try {
+  db.exec('ALTER TABLE batch_tasks ADD COLUMN kling_task_id TEXT');
+} catch (e) { }
 
 try {
   db.exec("ALTER TABLE batch_tasks ADD COLUMN model_name TEXT DEFAULT 'kling-v3'");

@@ -97,6 +97,50 @@ const fetchWithRetry = async (
     throw new Error('Exhausted retries');
 };
 
+const computeKlingShotDurations = (
+    itemCount: number,
+    totalDurationSeconds: number,
+    rawDurations: string[]
+): number[] => {
+    if (itemCount <= 0) return [];
+    if (totalDurationSeconds < itemCount) {
+        throw new Error(`multi_prompt has ${itemCount} shots but total duration is ${totalDurationSeconds}s. Increase total duration or reduce shots.`);
+    }
+
+    const parsed = rawDurations.map((value) => {
+        const n = Number.parseFloat((value || '').trim());
+        return Number.isFinite(n) && n > 0 ? n : 0;
+    });
+
+    const sum = parsed.reduce((acc, n) => acc + n, 0);
+    const weights = sum > 0 ? parsed : Array.from({ length: itemCount }, () => 1);
+    const weightSum = weights.reduce((acc, n) => acc + n, 0);
+
+    const minBase = Array.from({ length: itemCount }, () => 1);
+    let remaining = totalDurationSeconds - itemCount;
+    if (remaining === 0) return minBase;
+
+    const extras = Array.from({ length: itemCount }, () => 0);
+    const fractions = weights.map((w, idx) => {
+        const exactExtra = (remaining * w) / weightSum;
+        const whole = Math.floor(exactExtra);
+        extras[idx] = whole;
+        return { idx, frac: exactExtra - whole };
+    });
+
+    let used = extras.reduce((acc, n) => acc + n, 0);
+    let leftover = remaining - used;
+    fractions.sort((a, b) => b.frac - a.frac);
+    let pointer = 0;
+    while (leftover > 0 && fractions.length > 0) {
+        extras[fractions[pointer % fractions.length].idx] += 1;
+        leftover--;
+        pointer++;
+    }
+
+    return minBase.map((base, idx) => base + extras[idx]);
+};
+
 export class KlingService {
     // API URL updated to v1 endpoint
     private static get API_BASE_URL(): string {
@@ -396,18 +440,23 @@ export class KlingImageToVideoService {
 
             payload.multi_shot = normalizedItems.length > 0 ? 'true' : 'false';
             if (normalizedItems.length > 0) {
-                const totalDuration = normalizedItems.reduce((sum, item) => {
-                    const value = Number.parseFloat((item.duration || '').trim());
-                    return Number.isFinite(value) ? sum + value : sum;
-                }, 0);
-                if (totalDuration > 15) {
+                const totalDurationSeconds = Number.parseInt(params.duration || '5', 10);
+                if (!Number.isFinite(totalDurationSeconds) || totalDurationSeconds <= 0) {
+                    throw new Error('Invalid total duration for Kling multi_prompt');
+                }
+                if (totalDurationSeconds > 15) {
                     throw new Error('Kling multi_prompt max total duration is 15 seconds');
                 }
+                const shotDurations = computeKlingShotDurations(
+                    normalizedItems.length,
+                    totalDurationSeconds,
+                    normalizedItems.map((item) => item.duration || '')
+                );
 
                 const multiPrompt = normalizedItems.map((item, idx) => ({
                     index: idx + 1,
                     prompt: (item.prompt || params.prompt || '').trim(),
-                    duration: ((item.duration || '').trim() || '1')
+                    duration: String(shotDurations[idx])
                 }));
 
                 payload.shot_type = 'customize';
@@ -474,12 +523,12 @@ export class KlingImageToVideoService {
             callback_url?: string;
             external_task_id?: string;
         },
-        onStatusUpdate?: (status: string, videoUrl?: string) => void | Promise<void>
+        onStatusUpdate?: (status: string, videoUrl?: string, taskId?: string) => void | Promise<void>
     ): Promise<string> {
         try {
             const taskId = await this.createTask(config, params);
             console.log(`✓ [Kling I2V] Task submitted: ${taskId}`);
-            if (onStatusUpdate) await onStatusUpdate('generating');
+            if (onStatusUpdate) await onStatusUpdate('generating', undefined, taskId);
 
             let attempts = 0;
             const maxAttempts = 360;
@@ -500,7 +549,7 @@ export class KlingImageToVideoService {
                     console.log(`✓ [Kling I2V] Task completed! Downloading video...`);
                     const localUrl = await this.downloadVideo(remoteUrl);
 
-                    if (onStatusUpdate) await onStatusUpdate('completed', localUrl);
+                    if (onStatusUpdate) await onStatusUpdate('completed', localUrl, taskId);
                     return localUrl;
 
                 } else if (status === 'failed') {
@@ -513,5 +562,27 @@ export class KlingImageToVideoService {
             if (onStatusUpdate) await onStatusUpdate('failed');
             throw err;
         }
+    }
+
+    static async fetchVideoByTaskId(
+        config: KlingConfig,
+        taskId: string
+    ): Promise<{ task_status: string; videoUrl?: string; task_status_msg?: string }> {
+        const taskData = await this.checkStatus(config, taskId);
+        const status = taskData.task_status;
+
+        if (status === 'succeed') {
+            const videos = taskData.task_result?.videos;
+            if (!videos || !videos.length || !videos[0].url) {
+                throw new Error('Task succeeded but no video URL found');
+            }
+            const localUrl = await this.downloadVideo(videos[0].url);
+            return { task_status: status, videoUrl: localUrl };
+        }
+
+        return {
+            task_status: status,
+            task_status_msg: taskData.task_status_msg
+        };
     }
 }

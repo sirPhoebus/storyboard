@@ -1158,6 +1158,49 @@ app.delete('/api/batch/tasks/:id', (req: any, res: any) => {
     }
 });
 
+app.post('/api/batch/tasks/:id/fetch-video', async (req: any, res: any) => {
+    try {
+        const task = db.prepare('SELECT * FROM batch_tasks WHERE id = ?').get(req.params.id) as any;
+        if (!task) return res.status(404).json({ error: 'Task not found' });
+        if (!task.kling_task_id) return res.status(400).json({ error: 'Missing Kling task ID on this batch item' });
+
+        const klingApiKey = process.env.KLING_API_KEY;
+        const klingAccessKey = process.env.KLING_ACCESS_KEY;
+        const klingSecretKey = process.env.KLING_SECRET_KEY;
+        if (!klingApiKey && (!klingAccessKey || !klingSecretKey)) {
+            return res.status(500).json({ error: 'Server configuration error: Kling credentials missing' });
+        }
+        const klingConfig = {
+            ...(klingApiKey ? { klingApiKey } : {}),
+            ...(klingAccessKey ? { klingAccessKey } : {}),
+            ...(klingSecretKey ? { klingSecretKey } : {})
+        };
+
+        const result = await KlingImageToVideoService.fetchVideoByTaskId(klingConfig, task.kling_task_id);
+
+        if (result.task_status === 'succeed' && result.videoUrl) {
+            db.prepare('UPDATE batch_tasks SET status = ?, generated_video_url = ?, error = NULL WHERE id = ?').run(
+                'completed',
+                result.videoUrl,
+                task.id
+            );
+            const updated = db.prepare('SELECT * FROM batch_tasks WHERE id = ?').get(task.id) as any;
+            updated.audio_enabled = !!updated.audio_enabled;
+            updated.multi_prompt_items = parseMultiPromptItems(updated.multi_prompt_items, updated.middle_frame_urls);
+            updated.middle_frame_urls = parseMiddleUrls(updated.middle_frame_urls);
+            io.emit('batch:update', updated);
+            return res.json(updated);
+        }
+
+        return res.status(409).json({
+            error: result.task_status_msg || `Task is still ${result.task_status}`,
+            task_status: result.task_status
+        });
+    } catch (err: any) {
+        return res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/batch/generate', async (req: any, res: any) => {
     const allTasks = db.prepare("SELECT * FROM batch_tasks").all() as any[];
     console.log(`🔍 [Batch] Total tasks in DB: ${allTasks.length}`);
@@ -1269,8 +1312,11 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
             await KlingImageToVideoService.generate(
                 klingConfig,
                 options,
-                async (status, videoUrl) => {
+                async (status, videoUrl, taskId) => {
                     const updates: any = { status };
+                    if (taskId) {
+                        updates.kling_task_id = taskId;
+                    }
                     if (videoUrl) {
                         updates.generated_video_url = videoUrl;
                         // Automatically add to "Videos" page
