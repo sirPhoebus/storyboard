@@ -397,7 +397,6 @@ export class KlingImageToVideoService {
             duration: params.duration || '5'
         };
 
-        payload.prompt = params.prompt || '';
         if (params.cfg_scale) payload.cfg_scale = params.cfg_scale;
         payload.negative_prompt = params.negative_prompt || '';
 
@@ -483,6 +482,9 @@ export class KlingImageToVideoService {
 
             payload.multi_shot = normalizedItems.length > 0 ? 'true' : 'false';
             if (normalizedItems.length > 0) {
+                // Match Kling v3 multi-shot example behavior:
+                // keep top-level prompt empty and drive all shots via multi_prompt entries.
+                payload.prompt = '';
                 const totalDurationSeconds = Number.parseInt(params.duration || '5', 10);
                 if (!Number.isFinite(totalDurationSeconds) || totalDurationSeconds <= 0) {
                     throw new Error('Invalid total duration for Kling multi_prompt');
@@ -504,10 +506,14 @@ export class KlingImageToVideoService {
 
                 payload.shot_type = 'customize';
                 payload.multi_prompt = multiPrompt;
+            } else {
+                payload.prompt = params.prompt || '';
             }
             payload.sound = params.sound ? 'on' : 'off';
             payload.callback_url = params.callback_url ?? '';
             payload.external_task_id = params.external_task_id ?? '';
+        } else {
+            payload.prompt = params.prompt || '';
         }
 
         console.log(`📡 [Kling I2V] Creating task`, JSON.stringify(payload, null, 2));

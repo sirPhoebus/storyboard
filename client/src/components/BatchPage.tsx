@@ -245,19 +245,20 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                             }}>
                             {/* Frame Pair or Video Result */}
                             <div style={{ display: 'flex', gap: '12px', background: 'rgba(0,0,0,0.2)', padding: '12px', borderRadius: '16px' }}>
-                                {task.generated_video_url && task.status === 'completed' ? (
-                                    <div style={{ width: '252px', height: '140px', borderRadius: '8px', overflow: 'hidden', background: '#000', border: '2px solid #3498db', position: 'relative' }}>
-                                        <video
-                                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                                            controls
-                                            playsInline
-                                        >
-                                            <source src={`${API_BASE_URL}${task.generated_video_url}`} type="video/mp4" />
-                                            Your browser does not support the video tag.
-                                        </video>
-                                    </div>
-                                ) : (
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                    {task.generated_video_url && task.status === 'completed' && (
+                                        <div style={{ width: '252px', height: '140px', borderRadius: '8px', overflow: 'hidden', background: '#000', border: '2px solid #3498db', position: 'relative' }}>
+                                            <video
+                                                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                                                controls
+                                                playsInline
+                                            >
+                                                <source src={`${API_BASE_URL}${task.generated_video_url}`} type="video/mp4" />
+                                                Your browser does not support the video tag.
+                                            </video>
+                                        </div>
+                                    )}
+                                    
                                         <div style={{ display: 'flex', gap: '8px' }}>
                                             <div style={{ width: '120px', height: '70px', borderRadius: '8px', overflow: 'hidden', background: '#222', border: '1px solid rgba(255,255,255,0.05)', position: 'relative' }}>
                                                 {task.first_frame_url ? (
@@ -365,8 +366,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                         }}>
                                             {task.aspect_ratio || '16:9'}
                                         </div>
-                                    </div>
-                                )}
+                                </div>
                             </div>
 
                             {/* Controls */}
