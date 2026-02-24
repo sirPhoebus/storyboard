@@ -78,6 +78,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     const [uploadsInProgress, setUploadsInProgress] = useState<UploadState[]>([]);
     const [ratingFilter, setRatingFilter] = useState(0);
     const [contextMenu, setContextMenu] = useState<{ x: number, y: number, elementId: string } | null>(null);
+    const [middleMenuDisabledReason, setMiddleMenuDisabledReason] = useState<string | null>(null);
     const gridSize = 20;
 
     // Viewport Persistence Helpers
@@ -693,12 +694,30 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         setEditText(text);
     }, []);
 
-    const handleContextMenu = useCallback((e: Konva.KonvaEventObject<PointerEvent>, id: string) => {
+    const handleContextMenu = useCallback(async (e: Konva.KonvaEventObject<PointerEvent>, id: string) => {
         e.evt.preventDefault();
         const stage = e.target.getStage();
         if (!stage) return;
         const pos = stage.getPointerPosition();
         if (!pos) return;
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/batch/tasks`);
+            const tasks = await res.json() as any[];
+            const latestOpenTask = Array.isArray(tasks)
+                ? tasks.find((task) => ['pending', 'failed'].includes(task.status))
+                : null;
+            if (!latestOpenTask) {
+                setMiddleMenuDisabledReason(null);
+            } else if (latestOpenTask.last_frame_url) {
+                setMiddleMenuDisabledReason('Not possible: either first frame + last frame OR multi_prompt.');
+            } else {
+                const items = Array.isArray(latestOpenTask.multi_prompt_items) ? latestOpenTask.multi_prompt_items : [];
+                const maxItems = latestOpenTask.first_frame_url ? 5 : 6;
+                setMiddleMenuDisabledReason(items.length >= maxItems ? 'Maximum images reached for multi_prompt (6 images max).' : null);
+            }
+        } catch {
+            setMiddleMenuDisabledReason(null);
+        }
         setContextMenu({
             x: pos.x,
             y: pos.y,
@@ -1310,18 +1329,31 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     const handleSendToBatch = (elementId: string, role: 'first' | 'last' | 'middle') => {
         const el = elements.find(item => item.id === elementId);
         if (!el || !el.url) return;
+        if (role === 'middle' && middleMenuDisabledReason) {
+            alert(middleMenuDisabledReason);
+            return;
+        }
 
         fetch(`${API_BASE_URL}/api/batch/add-frame`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url: el.url, role })
         })
-            .then(res => res.json())
+            .then(async (res) => {
+                const data = await res.json();
+                if (!res.ok) {
+                    throw new Error(data.error || 'Failed to add frame to batch');
+                }
+                return data;
+            })
             .then(() => {
                 setContextMenu(null);
                 // Optionally show a toast/notification
             })
-            .catch(err => console.error('Failed to add frame to batch:', err));
+            .catch(err => {
+                alert(err.message || 'Failed to add frame to batch');
+                console.error('Failed to add frame to batch:', err);
+            });
     };
 
     const handleSyncVideos = useCallback(() => {
@@ -1396,11 +1428,12 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                     </div>
                     <div
                         onClick={() => handleSendToBatch(contextMenu.elementId, 'middle')}
-                        style={{ padding: '8px 16px', color: 'white', cursor: 'pointer', fontSize: '13px' }}
-                        onMouseOver={(e) => (e.currentTarget.style.background = '#34495e')}
+                        style={{ padding: '8px 16px', color: middleMenuDisabledReason ? '#777' : 'white', cursor: middleMenuDisabledReason ? 'not-allowed' : 'pointer', fontSize: '13px' }}
+                        onMouseOver={(e) => (e.currentTarget.style.background = middleMenuDisabledReason ? 'transparent' : '#34495e')}
                         onMouseOut={(e) => (e.currentTarget.style.background = 'transparent')}
+                        title={middleMenuDisabledReason || undefined}
                     >
-                        add a middle image
+                        Add image to multi_ptompt
                     </div>
                     <div style={{ height: '1px', background: 'rgba(255,255,255,0.1)', margin: '4px 0' }} />
                     <div

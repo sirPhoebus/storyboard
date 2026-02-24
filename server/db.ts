@@ -39,6 +39,7 @@ db.exec(`
     first_frame_url TEXT,
     last_frame_url TEXT,
     middle_frame_urls TEXT DEFAULT '[]',
+    multi_prompt_items TEXT DEFAULT '[]',
     prompt TEXT,
     duration INTEGER DEFAULT 5,
     audio_enabled INTEGER DEFAULT 0,
@@ -79,6 +80,9 @@ try {
 } catch (e) { }
 try {
   db.exec("ALTER TABLE batch_tasks ADD COLUMN middle_frame_urls TEXT DEFAULT '[]'");
+} catch (e) { }
+try {
+  db.exec("ALTER TABLE batch_tasks ADD COLUMN multi_prompt_items TEXT DEFAULT '[]'");
 } catch (e) { }
 
 try {

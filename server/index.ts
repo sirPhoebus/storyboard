@@ -825,6 +825,36 @@ const broadcastUserCount = () => {
     io.emit('user_count', count);
 };
 
+const parseMiddleUrls = (raw: unknown): string[] => {
+    if (!raw || typeof raw !== 'string') return [];
+    try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+    } catch {
+        return [];
+    }
+};
+
+const parseMultiPromptItems = (raw: unknown, fallbackRawUrls?: unknown): Array<{ url: string; prompt: string; duration: string }> => {
+    if (raw && typeof raw === 'string') {
+        try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+                return parsed
+                    .filter((item) => item && typeof item === 'object' && typeof item.url === 'string')
+                    .map((item: any) => ({
+                        url: item.url,
+                        prompt: typeof item.prompt === 'string' ? item.prompt : '',
+                        duration: typeof item.duration === 'string' ? item.duration : ''
+                    }));
+            }
+        } catch {
+            // fallback below
+        }
+    }
+    return parseMiddleUrls(fallbackRawUrls).map((url) => ({ url, prompt: '', duration: '' }));
+};
+
 app.get('/api/batch/tasks', (req: any, res: any) => {
     try {
         const tasks = db.prepare('SELECT * FROM batch_tasks ORDER BY created_at DESC').all();
@@ -832,15 +862,8 @@ app.get('/api/batch/tasks', (req: any, res: any) => {
             ...t,
             audio_enabled: !!t.audio_enabled,
             aspect_ratio: t.aspect_ratio || '16:9',
-            middle_frame_urls: (() => {
-                if (!t.middle_frame_urls) return [];
-                try {
-                    const parsed = JSON.parse(t.middle_frame_urls);
-                    return Array.isArray(parsed) ? parsed : [];
-                } catch {
-                    return [];
-                }
-            })()
+            multi_prompt_items: parseMultiPromptItems(t.multi_prompt_items, t.middle_frame_urls),
+            middle_frame_urls: parseMiddleUrls(t.middle_frame_urls)
         })));
     } catch (err: any) {
         res.status(500).json({ error: err.message });
@@ -926,40 +949,47 @@ app.post('/api/batch/add-frame', (req: any, res: any) => {
     if (!['first', 'last', 'middle'].includes(role)) return res.status(400).json({ error: 'Invalid role' });
 
     try {
-        const parseMiddleUrls = (raw: unknown): string[] => {
-            if (!raw || typeof raw !== 'string') return [];
-            try {
-                const parsed = JSON.parse(raw);
-                return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
-            } catch {
-                return [];
-            }
-        };
-
         if (role === 'middle') {
             const existingRow = db.prepare(`
-                SELECT id, middle_frame_urls
+                SELECT id, middle_frame_urls, multi_prompt_items, first_frame_url, last_frame_url
                 FROM batch_tasks
                 WHERE status IN ('pending', 'failed')
                 ORDER BY created_at DESC
                 LIMIT 1
-            `).get() as { id: string; middle_frame_urls?: string } | undefined;
+            `).get() as { id: string; middle_frame_urls?: string; multi_prompt_items?: string; first_frame_url?: string; last_frame_url?: string } | undefined;
 
             if (existingRow) {
-                const currentMiddleUrls = parseMiddleUrls(existingRow.middle_frame_urls);
-                const updatedMiddleUrls = [...currentMiddleUrls, url];
-                db.prepare('UPDATE batch_tasks SET middle_frame_urls = ? WHERE id = ?').run(JSON.stringify(updatedMiddleUrls), existingRow.id);
+                if (existingRow.last_frame_url) {
+                    return res.status(400).json({ error: 'Not possible: either first+last frame OR multi_prompt.' });
+                }
+
+                const currentItems = parseMultiPromptItems(existingRow.multi_prompt_items, existingRow.middle_frame_urls);
+                const maxMultiPromptImages = existingRow.first_frame_url ? 5 : 6;
+                if (currentItems.length >= maxMultiPromptImages) {
+                    return res.status(400).json({ error: 'Kling multi_prompt supports a maximum of 6 images.' });
+                }
+
+                const updatedItems = [...currentItems, { url, prompt: '', duration: '' }];
+                const updatedMiddleUrls = updatedItems.map((item) => item.url);
+                db.prepare('UPDATE batch_tasks SET multi_prompt_items = ?, middle_frame_urls = ? WHERE id = ?').run(
+                    JSON.stringify(updatedItems),
+                    JSON.stringify(updatedMiddleUrls),
+                    existingRow.id
+                );
                 const updated = db.prepare('SELECT * FROM batch_tasks WHERE id = ?').get(existingRow.id) as any;
                 updated.audio_enabled = !!updated.audio_enabled;
+                updated.multi_prompt_items = parseMultiPromptItems(updated.multi_prompt_items, updated.middle_frame_urls);
                 updated.middle_frame_urls = parseMiddleUrls(updated.middle_frame_urls);
                 io.emit('batch:update', updated);
                 return res.json(updated);
             }
 
             const id = crypto.randomUUID();
-            db.prepare('INSERT INTO batch_tasks (id, middle_frame_urls, aspect_ratio, model_name, mode) VALUES (?, ?, ?, ?, ?)').run(
+            const initialItems = [{ url, prompt: '', duration: '' }];
+            db.prepare('INSERT INTO batch_tasks (id, middle_frame_urls, multi_prompt_items, aspect_ratio, model_name, mode) VALUES (?, ?, ?, ?, ?, ?)').run(
                 id,
-                JSON.stringify([url]),
+                JSON.stringify(initialItems.map((item) => item.url)),
+                JSON.stringify(initialItems),
                 '16:9',
                 'kling-v3',
                 'pro'
@@ -968,7 +998,8 @@ app.post('/api/batch/add-frame', (req: any, res: any) => {
                 id,
                 first_frame_url: null,
                 last_frame_url: null,
-                middle_frame_urls: [url],
+                middle_frame_urls: initialItems.map((item) => item.url),
+                multi_prompt_items: initialItems,
                 prompt: '',
                 duration: 5,
                 audio_enabled: false,
@@ -994,9 +1025,17 @@ app.post('/api/batch/add-frame', (req: any, res: any) => {
         `).get() as { id: string } | undefined;
 
         if (existingRow) {
+            if (role === 'last') {
+                const row = db.prepare('SELECT middle_frame_urls, multi_prompt_items FROM batch_tasks WHERE id = ?').get(existingRow.id) as any;
+                const hasMultiPrompt = parseMultiPromptItems(row?.multi_prompt_items, row?.middle_frame_urls).length > 0;
+                if (hasMultiPrompt) {
+                    return res.status(400).json({ error: 'Not possible: either first+last frame OR multi_prompt.' });
+                }
+            }
             db.prepare(`UPDATE batch_tasks SET ${columnToFill} = ? WHERE id = ?`).run(url, existingRow.id);
             const updated = db.prepare('SELECT * FROM batch_tasks WHERE id = ?').get(existingRow.id) as any;
             updated.audio_enabled = !!updated.audio_enabled;
+            updated.multi_prompt_items = parseMultiPromptItems(updated.multi_prompt_items, updated.middle_frame_urls);
             updated.middle_frame_urls = parseMiddleUrls(updated.middle_frame_urls);
             io.emit('batch:update', updated);
             return res.json(updated);
@@ -1014,9 +1053,13 @@ app.post('/api/batch/add-frame', (req: any, res: any) => {
         `).get() as { id: string } | undefined;
 
         if (middleOnlyRow) {
+            if (role === 'last') {
+                return res.status(400).json({ error: 'Not possible: either first+last frame OR multi_prompt.' });
+            }
             db.prepare(`UPDATE batch_tasks SET ${columnToFill} = ? WHERE id = ?`).run(url, middleOnlyRow.id);
             const updated = db.prepare('SELECT * FROM batch_tasks WHERE id = ?').get(middleOnlyRow.id) as any;
             updated.audio_enabled = !!updated.audio_enabled;
+            updated.multi_prompt_items = parseMultiPromptItems(updated.multi_prompt_items, updated.middle_frame_urls);
             updated.middle_frame_urls = parseMiddleUrls(updated.middle_frame_urls);
             io.emit('batch:update', updated);
             return res.json(updated);
@@ -1028,6 +1071,7 @@ app.post('/api/batch/add-frame', (req: any, res: any) => {
             [columnToFill]: url,
             [columnToCheck]: null,
             middle_frame_urls: [],
+            multi_prompt_items: [],
             prompt: '',
             duration: 5,
             audio_enabled: false,
@@ -1045,7 +1089,7 @@ app.post('/api/batch/add-frame', (req: any, res: any) => {
 });
 
 app.patch('/api/batch/tasks/:id', (req: any, res: any) => {
-    const { prompt, duration, audio_enabled, aspect_ratio, status, model_name, mode, cfg_scale, negative_prompt, middle_frame_urls } = req.body;
+    const { prompt, duration, audio_enabled, aspect_ratio, status, model_name, mode, cfg_scale, negative_prompt, middle_frame_urls, multi_prompt_items } = req.body;
     const updates: string[] = [];
     const values: any[] = [];
 
@@ -1059,23 +1103,44 @@ app.patch('/api/batch/tasks/:id', (req: any, res: any) => {
     if (cfg_scale !== undefined) { updates.push('cfg_scale = ?'); values.push(cfg_scale); }
     if (negative_prompt !== undefined) { updates.push('negative_prompt = ?'); values.push(negative_prompt); }
     if (middle_frame_urls !== undefined) { updates.push('middle_frame_urls = ?'); values.push(JSON.stringify(Array.isArray(middle_frame_urls) ? middle_frame_urls : [])); }
+    if (multi_prompt_items !== undefined) {
+        const normalizedItems = Array.isArray(multi_prompt_items)
+            ? multi_prompt_items
+                .filter((item: any) => item && typeof item.url === 'string')
+                .map((item: any) => ({
+                    url: item.url,
+                    prompt: typeof item.prompt === 'string' ? item.prompt : '',
+                    duration: typeof item.duration === 'string' ? item.duration : ''
+                }))
+            : [];
+        updates.push('multi_prompt_items = ?');
+        values.push(JSON.stringify(normalizedItems));
+        updates.push('middle_frame_urls = ?');
+        values.push(JSON.stringify(normalizedItems.map((item: any) => item.url)));
+    }
 
     if (updates.length === 0) return res.status(400).json({ error: 'No fields to update' });
 
     try {
+        if (multi_prompt_items !== undefined) {
+            const current = db.prepare('SELECT first_frame_url, last_frame_url FROM batch_tasks WHERE id = ?').get(req.params.id) as any;
+            const normalizedItems = Array.isArray(multi_prompt_items)
+                ? multi_prompt_items.filter((item: any) => item && typeof item.url === 'string')
+                : [];
+            if (current?.last_frame_url && normalizedItems.length > 0) {
+                return res.status(400).json({ error: 'Not possible: either first+last frame OR multi_prompt.' });
+            }
+            const maxItems = current?.first_frame_url ? 5 : 6;
+            if (normalizedItems.length > maxItems) {
+                return res.status(400).json({ error: 'Kling multi_prompt supports a maximum of 6 images.' });
+            }
+        }
         db.prepare(`UPDATE batch_tasks SET ${updates.join(', ')} WHERE id = ?`).run(...values, req.params.id);
         const updated = db.prepare('SELECT * FROM batch_tasks WHERE id = ?').get(req.params.id) as any;
         updated.audio_enabled = !!updated.audio_enabled;
         updated.aspect_ratio = updated.aspect_ratio || '16:9';
-        updated.middle_frame_urls = (() => {
-            if (!updated.middle_frame_urls) return [];
-            try {
-                const parsed = JSON.parse(updated.middle_frame_urls);
-                return Array.isArray(parsed) ? parsed : [];
-            } catch {
-                return [];
-            }
-        })();
+        updated.multi_prompt_items = parseMultiPromptItems(updated.multi_prompt_items, updated.middle_frame_urls);
+        updated.middle_frame_urls = parseMiddleUrls(updated.middle_frame_urls);
         io.emit('batch:update', updated);
         res.json(updated);
     } catch (err: any) {
@@ -1153,19 +1218,26 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
 
             const firstFrame = getPublicUrl(task.first_frame_url);
             const lastFrame = getPublicUrl(task.last_frame_url);
-            const middleFrames = (() => {
-                if (!task.middle_frame_urls) return [];
-                try {
-                    const parsed = JSON.parse(task.middle_frame_urls);
-                    return Array.isArray(parsed) ? parsed.map((url: string) => getPublicUrl(url)).filter((url: unknown): url is string => typeof url === 'string') : [];
-                } catch {
-                    return [];
-                }
-            })();
+            const multiPromptItems = parseMultiPromptItems(task.multi_prompt_items, task.middle_frame_urls)
+                .map((item) => {
+                    const resolved = getPublicUrl(item.url);
+                    return resolved ? { ...item, url: resolved } : null;
+                })
+                .filter((item): item is { url: string; prompt: string; duration: string } => item !== null);
 
             if (!firstFrame) {
                 console.error(`❌ [Kling] Task ${task.id} missing start image URL, skipping`);
                 db.prepare('UPDATE batch_tasks SET status = ?, error = ? WHERE id = ?').run('failed', 'Missing first frame', task.id);
+                continue;
+            }
+            if (lastFrame && multiPromptItems.length > 0) {
+                console.error(`❌ [Kling] Task ${task.id} invalid config: last_frame + multi_prompt`);
+                db.prepare('UPDATE batch_tasks SET status = ?, error = ? WHERE id = ?').run('failed', 'Not possible: either first+last frame OR multi_prompt', task.id);
+                continue;
+            }
+            if ((1 + multiPromptItems.length) > 6) {
+                console.error(`❌ [Kling] Task ${task.id} invalid config: too many multi_prompt images`);
+                db.prepare('UPDATE batch_tasks SET status = ?, error = ? WHERE id = ?').run('failed', 'Kling multi_prompt supports a maximum of 6 images', task.id);
                 continue;
             }
 
@@ -1176,7 +1248,7 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
                 duration: ([5, 10, 15].includes(task.duration) ? String(task.duration) : '5') as '5' | '10' | '15',
                 ...(task.prompt ? { prompt: task.prompt } : { prompt: "Cinematic high quality video" }),
                 ...(lastFrame ? { image_tail: lastFrame } : {}),
-                ...(middleFrames.length ? { middle_images: middleFrames } : {}),
+                ...(multiPromptItems.length ? { multi_prompt_items: multiPromptItems } : {}),
                 ...(task.mode ? { mode: task.mode as 'std' | 'pro' } : { mode: 'pro' as const }),
                 ...(task.model_name ? { model_name: task.model_name as string } : { model_name: 'kling-v3' }),
                 ...(task.cfg_scale ? { cfg_scale: Number(task.cfg_scale) } : { cfg_scale: 0.5 }),
@@ -1263,15 +1335,8 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
                         ...task,
                         ...updates,
                         audio_enabled: !!task.audio_enabled,
-                        middle_frame_urls: (() => {
-                            if (!task.middle_frame_urls) return [];
-                            try {
-                                const parsed = JSON.parse(task.middle_frame_urls);
-                                return Array.isArray(parsed) ? parsed : [];
-                            } catch {
-                                return [];
-                            }
-                        })()
+                        multi_prompt_items: parseMultiPromptItems(task.multi_prompt_items, task.middle_frame_urls),
+                        middle_frame_urls: parseMiddleUrls(task.middle_frame_urls)
                     });
                 }
             );
@@ -1284,15 +1349,8 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
                 ...task,
                 status: 'failed',
                 audio_enabled: !!task.audio_enabled,
-                middle_frame_urls: (() => {
-                    if (!task.middle_frame_urls) return [];
-                    try {
-                        const parsed = JSON.parse(task.middle_frame_urls);
-                        return Array.isArray(parsed) ? parsed : [];
-                    } catch {
-                        return [];
-                    }
-                })()
+                multi_prompt_items: parseMultiPromptItems(task.multi_prompt_items, task.middle_frame_urls),
+                middle_frame_urls: parseMiddleUrls(task.middle_frame_urls)
             });
         }
     }
