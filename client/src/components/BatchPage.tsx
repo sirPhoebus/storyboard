@@ -21,12 +21,17 @@ interface BatchPageProps {
     socket: Socket | null;
 }
 
+type PromptFocusTarget =
+    | { type: 'task_prompt'; taskId: string }
+    | { type: 'multi_prompt_item'; taskId: string; index: number };
+
 const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
     const [tasks, setTasks] = useState<BatchTask[]>([]);
     const [loading, setLoading] = useState(true);
     const [prompts, setPrompts] = useState<PromptCategory[]>([]);
     const [promptsPanelOpen, setPromptsPanelOpen] = useState(true);
     const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+    const [promptFocusTarget, setPromptFocusTarget] = useState<PromptFocusTarget | null>(null);
     const middleImageInputsRef = useRef<Record<string, HTMLInputElement | null>>({});
 
     useEffect(() => {
@@ -108,6 +113,19 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
     };
 
     const handleSelectPrompt = (prompt: string) => {
+        if (promptFocusTarget) {
+            if (promptFocusTarget.type === 'task_prompt') {
+                handleUpdateTask(promptFocusTarget.taskId, { prompt });
+                return;
+            }
+            if (promptFocusTarget.type === 'multi_prompt_item') {
+                const task = tasks.find(t => t.id === promptFocusTarget.taskId);
+                if (!task) return;
+                updateMultiPromptItem(task, promptFocusTarget.index, { prompt });
+                return;
+            }
+        }
+
         if (selectedTaskId) {
             handleUpdateTask(selectedTaskId, { prompt });
         }
@@ -305,6 +323,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                                             <textarea
                                                                 value={item.prompt || ''}
                                                                 onClick={(e) => e.stopPropagation()}
+                                                                onFocus={() => setPromptFocusTarget({ type: 'multi_prompt_item', taskId: task.id, index: idx })}
                                                                 onChange={(e) => updateMultiPromptItem(task, idx, { prompt: e.target.value })}
                                                                 placeholder="Prompt for this image"
                                                                 style={{ width: '100%', minHeight: '42px', resize: 'vertical', fontSize: '11px', background: 'rgba(0,0,0,0.25)', color: '#eee', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '6px', outline: 'none' }}
@@ -357,6 +376,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                         <label style={{ display: 'block', fontSize: '11px', color: '#888', marginBottom: '4px', fontWeight: 600, textTransform: 'uppercase' }}>Positive Prompt</label>
                                         <textarea
                                             value={task.prompt || ''}
+                                            onFocus={() => setPromptFocusTarget({ type: 'task_prompt', taskId: task.id })}
                                             onChange={(e) => handleUpdateTask(task.id, { prompt: e.target.value })}
                                             placeholder="Describe the motion..."
                                             style={{
@@ -623,18 +643,18 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                                         <button
                                             key={move.id}
                                             onClick={() => handleSelectPrompt(move.prompt)}
-                                            disabled={!selectedTaskId}
+                                            disabled={!promptFocusTarget && !selectedTaskId}
                                             style={{
                                                 background: 'rgba(255,255,255,0.03)',
                                                 border: '1px solid rgba(255,255,255,0.08)',
                                                 borderRadius: '8px',
                                                 padding: '10px 12px',
                                                 textAlign: 'left',
-                                                cursor: selectedTaskId ? 'pointer' : 'not-allowed',
+                                                cursor: (promptFocusTarget || selectedTaskId) ? 'pointer' : 'not-allowed',
                                                 transition: 'all 0.2s',
-                                                opacity: selectedTaskId ? 1 : 0.5
+                                                opacity: (promptFocusTarget || selectedTaskId) ? 1 : 0.5
                                             }}
-                                            onMouseOver={(e) => selectedTaskId && (e.currentTarget.style.background = 'rgba(52, 152, 219, 0.1)')}
+                                            onMouseOver={(e) => (promptFocusTarget || selectedTaskId) && (e.currentTarget.style.background = 'rgba(52, 152, 219, 0.1)')}
                                             onMouseOut={(e) => (e.currentTarget.style.background = 'rgba(255,255,255,0.03)')}
                                         >
                                             <div style={{ fontSize: '12px', fontWeight: 600, color: 'white', marginBottom: '4px' }}>

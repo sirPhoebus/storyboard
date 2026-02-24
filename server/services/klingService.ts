@@ -133,12 +133,15 @@ const computeKlingShotDurations = (
     fractions.sort((a, b) => b.frac - a.frac);
     let pointer = 0;
     while (leftover > 0 && fractions.length > 0) {
-        extras[fractions[pointer % fractions.length].idx] += 1;
+        const target = fractions[pointer % fractions.length];
+        if (target) {
+            extras[target.idx] = (extras[target.idx] ?? 0) + 1;
+        }
         leftover--;
         pointer++;
     }
 
-    return minBase.map((base, idx) => base + extras[idx]);
+    return minBase.map((base, idx) => base + (extras[idx] ?? 0));
 };
 
 export class KlingService {
