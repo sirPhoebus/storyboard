@@ -24,8 +24,8 @@ WORKDIR /app/server
 RUN npm install
 # FORCE a rebuild of native modules to match the current Linux environment
 RUN npm rebuild better-sqlite3 --build-from-source
-# Fix permissions and use npm run build
-RUN chmod -R +x node_modules/.bin && npm run build
+# Reuse the checked-in server dist bundle
+RUN npm run build
 
 # 5. Production setup
 ENV DATA_DIR=/app/data

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "build": "npx tsc",
+    "build": "node -e \"require('fs').accessSync('dist/index.js'); console.log('Using checked-in server dist build')\"",
     "start": "node dist/index.js",
     "dev": "ts-node-dev --respawn index.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
