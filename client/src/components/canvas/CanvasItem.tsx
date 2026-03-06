@@ -5,6 +5,15 @@ import Konva from 'konva';
 import MultimediaElement from '../MultimediaElement';
 import type { Element } from '../../types';
 
+const arePointsEqual = (a?: number[], b?: number[]) => {
+    if (a === b) return true;
+    if (!a || !b || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+        if (a[i] !== b[i]) return false;
+    }
+    return true;
+};
+
 interface CanvasItemProps {
     element: Element;
     isSelected: boolean;
@@ -18,6 +27,7 @@ interface CanvasItemProps {
     onDblClick?: (id: string, text: string) => void;
     onArrowPointDrag?: (id: string, index: number, x: number, y: number) => void;
     onArrowPointDragEnd?: (id: string) => void;
+    onPlayRequest?: (url: string, title?: string) => void;
     onUpdateElement?: (id: string, style: Partial<Element>) => void;
     onContextMenu?: (e: Konva.KonvaEventObject<PointerEvent>, id: string) => void;
 }
@@ -35,6 +45,7 @@ const CanvasItem: React.FC<CanvasItemProps> = memo(({
     onDblClick,
     onArrowPointDrag,
     onArrowPointDragEnd,
+    onPlayRequest,
     onUpdateElement,
     onContextMenu
 }) => {
@@ -140,17 +151,20 @@ const CanvasItem: React.FC<CanvasItemProps> = memo(({
         );
     }
 
-    if (el.type === 'image' || el.type === 'video') {
+    if (el.type === 'image' || el.type === 'video' || el.type === 'video-card') {
         return (
             <MultimediaElement
                 ref={onRef as any}
                 id={el.id}
-                type={el.type as 'image' | 'video'}
+                type={el.type as 'image' | 'video' | 'video-card'}
                 x={el.x}
                 y={el.y}
                 width={el.width}
                 height={el.height}
                 url={el.url || ''}
+                title={el.text}
+                sourceVideoUrl={el.sourceVideoUrl}
+                onPlayRequest={onPlayRequest}
                 isSelected={isSelected}
                 draggable={!isEditing}
                 onClick={handleClick}
@@ -185,6 +199,7 @@ const CanvasItem: React.FC<CanvasItemProps> = memo(({
 
     // Check fields that matter for rendering
     return (
+        pEl.type === nEl.type &&
         pEl.x === nEl.x &&
         pEl.y === nEl.y &&
         pEl.width === nEl.width &&
@@ -196,10 +211,11 @@ const CanvasItem: React.FC<CanvasItemProps> = memo(({
         pEl.fontSize === nEl.fontSize &&
         pEl.fontStyle === nEl.fontStyle &&
         pEl.url === nEl.url &&
+        pEl.sourceVideoUrl === nEl.sourceVideoUrl &&
         pEl.isPlaying === nEl.isPlaying &&
         pEl.isMuted === nEl.isMuted &&
         pEl.rating === nEl.rating &&
-        JSON.stringify(pEl.points) === JSON.stringify(nEl.points)
+        arePointsEqual(pEl.points, nEl.points)
     );
 });
 

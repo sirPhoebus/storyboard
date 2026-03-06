@@ -6,7 +6,7 @@ import { API_BASE_URL } from '../config';
 
 interface MultimediaElementProps {
     id: string;
-    type: 'image' | 'video';
+    type: 'image' | 'video' | 'video-card';
     x: number;
     y: number;
     width: number;
@@ -25,6 +25,9 @@ interface MultimediaElementProps {
     isMuted?: boolean;
     // Rating
     rating?: number;
+    title?: string;
+    sourceVideoUrl?: string;
+    onPlayRequest?: (url: string, title?: string) => void;
     onUpdateElement?: (id: string, updates: Partial<MultimediaElementProps>) => void;
 }
 
@@ -47,13 +50,16 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
     isPlaying = false,  // Changed: videos don't autoplay by default
     isMuted = true,
     rating = 0,
+    title,
+    sourceVideoUrl,
+    onPlayRequest,
     onUpdateElement,
 }, ref) => {
     // Ensure we use the full URL if it's relative, as we might not have a proxy set up
     const fullUrl = url.startsWith('http') ? url : `${API_BASE_URL}${url}`;
 
     // Only fetch image if type is image to save resources
-    const [image] = useImage(type === 'image' ? fullUrl : '', 'anonymous');
+    const [image] = useImage(type === 'image' || type === 'video-card' ? fullUrl : '', 'anonymous');
     const videoRef = useRef<HTMLVideoElement | null>(null);
     const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
     const imageRef = useRef<Konva.Image>(null);
@@ -95,7 +101,7 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
             video.playsInline = true;
             video.setAttribute('webkit-playsinline', 'true'); // iOS support
 
-            setTimeout(() => setVideoElement(video), 0);
+            const mountTimer = window.setTimeout(() => setVideoElement(video), 0);
             videoRef.current = video;
 
             // Proper animation loop for Konva
@@ -127,6 +133,7 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
             };
 
             return () => {
+                window.clearTimeout(mountTimer);
                 if (anim) anim.stop();
                 video.pause();
                 video.src = '';
@@ -140,7 +147,14 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
     const handleRatingClick = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>, value: number) => {
         e.cancelBubble = true;
         if (onUpdateElement) {
-            onUpdateElement(id, { rating: value });
+            onUpdateElement(id, { rating: rating === value ? 0 : value });
+        }
+    };
+
+    const handlePlayClick = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
+        e.cancelBubble = true;
+        if (sourceVideoUrl && onPlayRequest) {
+            onPlayRequest(sourceVideoUrl, title);
         }
     };
 
@@ -201,14 +215,78 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
         >
-            <KonvaImage
-                ref={imageRef}
-                image={type === 'image' ? image : (videoElement || undefined)}
-                width={width}
-                height={height}
-                stroke={isSelected ? '#3498db' : undefined}
-                strokeWidth={isSelected ? 4 : 0}
-            />
+            {type === 'video-card' ? (
+                <>
+                    <Rect
+                        width={width}
+                        height={height}
+                        fill="#0f172a"
+                        cornerRadius={18}
+                        stroke={isSelected ? '#3498db' : 'rgba(148, 163, 184, 0.22)'}
+                        strokeWidth={isSelected ? 4 : 1}
+                        shadowColor="black"
+                        shadowBlur={18}
+                        shadowOpacity={0.22}
+                        shadowOffsetY={10}
+                    />
+                    <KonvaImage
+                        ref={imageRef}
+                        image={image || undefined}
+                        x={10}
+                        y={10}
+                        width={width - 20}
+                        height={height - 54}
+                    />
+                    <Rect
+                        x={10}
+                        y={height - 52}
+                        width={width - 20}
+                        height={42}
+                        fill="rgba(15, 23, 42, 0.96)"
+                        cornerRadius={12}
+                    />
+                    <Text
+                        text={title || 'Video'}
+                        x={20}
+                        y={height - 40}
+                        width={width - 80}
+                        fontSize={14}
+                        fontStyle="bold"
+                        fill="#e2e8f0"
+                        ellipsis
+                    />
+                    <Rect
+                        x={width - 48}
+                        y={height - 43}
+                        width={26}
+                        height={26}
+                        fill="rgba(125, 211, 252, 0.18)"
+                        stroke="rgba(125, 211, 252, 0.45)"
+                        strokeWidth={1}
+                        cornerRadius={13}
+                        onClick={handlePlayClick}
+                        onTap={handlePlayClick}
+                    />
+                    <Text
+                        text="▶"
+                        x={width - 40}
+                        y={height - 38}
+                        fontSize={12}
+                        fill="#e0f2fe"
+                        onClick={handlePlayClick}
+                        onTap={handlePlayClick}
+                    />
+                </>
+            ) : (
+                <KonvaImage
+                    ref={imageRef}
+                    image={type === 'image' ? image : (videoElement || undefined)}
+                    width={width}
+                    height={height}
+                    stroke={isSelected ? '#3498db' : undefined}
+                    strokeWidth={isSelected ? 4 : 0}
+                />
+            )}
             {isHovered && (
                 <Group>
                     <Rect

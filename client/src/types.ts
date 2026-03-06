@@ -22,6 +22,7 @@ export interface Element {
     isMuted?: boolean;
     pageId?: string;
     rating?: number;
+    sourceVideoUrl?: string;
 }
 
 export interface Project {
@@ -52,6 +53,7 @@ export interface Page {
 
 export interface BatchTask {
     id: string;
+    project_id?: string;
     first_frame_url?: string;
     last_frame_url?: string;
     middle_frame_urls?: string[];
@@ -68,6 +70,18 @@ export interface BatchTask {
     mode: 'std' | 'pro';
     cfg_scale: number;
     negative_prompt?: string;
+}
+
+export interface GalleryVideo {
+    id: string;
+    project_id: string;
+    title: string;
+    video_url: string;
+    thumbnail_url?: string;
+    created_at: string;
+    source: 'batch' | 'imported';
+    source_id: string;
+    duration?: number;
 }
 
 export interface AuthUser {

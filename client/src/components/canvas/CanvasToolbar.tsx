@@ -20,7 +20,6 @@ interface CanvasToolbarProps {
     onDelete: (ids: string[]) => void;
     onDownload: () => void;
     onCreateGrid: () => void;
-    onSyncVideos?: () => void;
     onMoveSelectionToPage: (targetPageId: string) => void;
     onResetSize: (ids: string[]) => void;
     onSaveView: () => void;
@@ -46,7 +45,6 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
     onDelete,
     onDownload,
     onCreateGrid,
-    onSyncVideos,
     onMoveSelectionToPage,
 
     onResetSize,
@@ -133,16 +131,6 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
                 title={pageId ? "Add Media" : noPageMessage}
             >Add Media</button>
 
-            {allPages.find(p => p.id === pageId)?.type === 'videos' && onSyncVideos && (
-                <button
-                    onClick={onSyncVideos}
-                    style={{ ...mainButtonStyle, background: '#2ecc71' }}
-                    title="Scan folder for new videos and add to canvas"
-                >
-                    Sync Videos 🔄
-                </button>
-            )}
-
             {pageId && (
                 <button
                     onClick={onSaveView}
@@ -183,13 +171,13 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
 
             {(selectedIds.some(id => {
                 const el = elements.find(e => e.id === id);
-                return el?.type === 'image' || el?.type === 'video';
+                return el?.type === 'image' || el?.type === 'video' || el?.type === 'video-card';
             })) && (
                     <>
                         <button
                             onClick={() => onResetSize(selectedIds.filter(id => {
                                 const el = elements.find(e => e.id === id);
-                                return el?.type === 'image' || el?.type === 'video';
+                                return el?.type === 'image' || el?.type === 'video' || el?.type === 'video-card';
                             }))}
                             style={subButtonStyle}
                             title="Reset to original size"
@@ -255,7 +243,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
 
             {selectedIds.some(id => {
                 const el = elements.find(e => e.id === id);
-                return el?.type === 'image' || el?.type === 'video';
+                return el?.type === 'image' || el?.type === 'video' || el?.type === 'video-card';
             }) && (
                     <button onClick={onDownload} style={mainButtonStyle} title="Download selected media as ZIP">
                         Download ↓
@@ -337,3 +325,5 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
         </div>
     );
 };
+
+

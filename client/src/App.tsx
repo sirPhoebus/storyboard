@@ -9,6 +9,7 @@ import { useProjects } from './hooks/useProjects'
 import HelpManual from './components/HelpManual'
 import BatchPage from './components/BatchPage'
 import ChatRoomModal from './components/ChatRoomModal'
+import VideosPage from './components/VideosPage'
 
 
 
@@ -26,11 +27,12 @@ function App() {
   const [connectedUsers, setConnectedUsers] = useState(1);
   const [isManualOpen, setIsManualOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const [view, setView] = useState<'canvas' | 'batch'>('canvas');
+  const [view, setView] = useState<'canvas' | 'batch' | 'videos'>('videos');
   const [currentStoryboardId, setCurrentStoryboardId] = useState<string | null>(null);
   const [username, setUsername] = useState<string>(() => localStorage.getItem('chat_username') || '');
 
-  const pages = allPages.filter(p => p.chapter_id === currentChapterId);
+  const videoPage = allPages.find((page) => page.type === 'videos') ?? null;
+  const pages = allPages.filter((page) => page.chapter_id === currentChapterId && page.type !== 'videos');
 
   useEffect(() => {
     if (!username) {
@@ -54,6 +56,7 @@ function App() {
       setCurrentChapterId(null);
       setCurrentPageId(null);
       setCurrentStoryboardId(null);
+      setView('videos');
 
       fetch(`${API_BASE_URL}/api/projects/${currentProjectId}/storyboard`)
         .then(res => res.json())
@@ -78,7 +81,7 @@ function App() {
           return;
         }
         setChapters(data);
-        if (data.length > 0 && !currentChapterId) {
+        if (data.length > 0 && (!currentChapterId || !data.find((chapter: Chapter) => chapter.id === currentChapterId))) {
           setCurrentChapterId(data[0].id);
         }
       });
@@ -97,10 +100,11 @@ function App() {
           return;
         }
         setAllPages(data);
-        if (data.length > 0) {
-          const firstPageInChapter = data.find((p: Page) => p.chapter_id === currentChapterId);
-          if (!currentPageId || !data.find((p: Page) => p.id === currentPageId)) {
-            setCurrentPageId(firstPageInChapter ? firstPageInChapter.id : data[0].id);
+        const normalPages = data.filter((page: Page) => page.type !== 'videos');
+        if (normalPages.length > 0) {
+          const firstPageInChapter = normalPages.find((p: Page) => p.chapter_id === currentChapterId);
+          if (!currentPageId || !normalPages.find((p: Page) => p.id === currentPageId)) {
+            setCurrentPageId(firstPageInChapter ? firstPageInChapter.id : normalPages[0].id);
           }
         } else {
           setCurrentPageId(null);
@@ -179,7 +183,7 @@ function App() {
   const handlePageSelection = useCallback((pageId: string) => {
     // Find the page to discover its chapter
     const page = allPages.find(p => p.id === pageId);
-    if (page) {
+    if (page && page.type !== 'videos') {
       if (page.chapter_id !== currentChapterId) {
         setCurrentChapterId(page.chapter_id);
       }
@@ -188,13 +192,31 @@ function App() {
     }
   }, [allPages, currentChapterId]);
 
+  const handleChapterSelection = useCallback((chapterId: string) => {
+    setCurrentChapterId(chapterId);
+    setView('canvas');
+  }, []);
+
+  const handleOpenVideos = useCallback(() => {
+    setCurrentPageId(videoPage?.id ?? null);
+    setView('videos');
+  }, [videoPage?.id]);
+
+  const handleOpenBatchManagement = useCallback(() => {
+    setView('batch');
+  }, []);
+
   useEffect(() => {
+    if (view !== 'canvas') {
+      return;
+    }
+
     if (currentChapterId && allPages.length > 0) {
       // Find the first page of the selected chapter
-      const firstPageInChapter = allPages.find((p: Page) => p.chapter_id === currentChapterId);
+      const firstPageInChapter = allPages.find((p: Page) => p.chapter_id === currentChapterId && p.type !== 'videos');
 
       // Check if the current page is already in the selected chapter
-      const isCurrentPageInChapter = allPages.find((p: Page) => p.id === currentPageId && p.chapter_id === currentChapterId);
+      const isCurrentPageInChapter = allPages.find((p: Page) => p.id === currentPageId && p.chapter_id === currentChapterId && p.type !== 'videos');
 
       // Only switch if we are NOT already on a page belonging to this chapter
       if (!isCurrentPageInChapter) {
@@ -205,7 +227,7 @@ function App() {
         }
       }
     }
-  }, [currentChapterId, allPages, currentPageId, handlePageSelection]);
+  }, [currentChapterId, allPages, currentPageId, handlePageSelection, view]);
 
 
   const handleAddChapter = () => {
@@ -338,7 +360,7 @@ function App() {
         <Sidebar
           chapters={chapters}
           currentChapterId={currentChapterId}
-          onSelectChapter={setCurrentChapterId}
+          onSelectChapter={handleChapterSelection}
           onAddChapter={handleAddChapter}
           onDeleteChapter={handleDeleteChapter}
           onRenameChapter={handleRenameChapter}
@@ -354,6 +376,10 @@ function App() {
           onWidthChange={setSidebarWidth}
           connectedUsers={connectedUsers}
           projects={projects}
+          currentView={view}
+          hasVideos={!!videoPage}
+          onSelectVideos={handleOpenVideos}
+          onOpenBatchManagement={handleOpenBatchManagement}
         />
 
         {view === 'canvas' ? (
@@ -364,13 +390,16 @@ function App() {
             chapters={chapters}
             allPages={allPages}
             onSelectPage={handlePageSelection}
-            onOpenBatchManagement={() => setView('batch')}
+            onOpenBatchManagement={handleOpenBatchManagement}
             socket={socket}
             currentProjectId={currentProjectId}
           />
+        ) : view === 'videos' ? (
+          <VideosPage socket={socket} currentProjectId={currentProjectId} chapters={chapters} pages={allPages} />
         ) : (
           <BatchPage
             socket={socket}
+            currentProjectId={currentProjectId}
           />
         )}
       </div>

@@ -143,7 +143,7 @@ export default function ProjectTabs({
                 <button
                     className="icon-btn"
                     onClick={onOpenHelp}
-                    title="Help & Manual"
+                    title="Help & Manual - V1.21"
                     style={{ color: 'rgba(255,255,255,0.7)' }}
                 >
                     <HelpCircle size={20} />

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Socket } from 'socket.io-client';
 import { API_BASE_URL } from '../config';
 import type { BatchTask } from '../types';
-import { Play, Trash2, Volume2, VolumeX, ChevronLeft, Hourglass, Download, ChevronRight, RefreshCw } from 'lucide-react';
+import { Play, Trash2, Volume2, VolumeX, ChevronLeft, Hourglass, Download, ChevronRight, RefreshCw, FolderSearch } from 'lucide-react';
 
 interface PromptMove {
     id: string;
@@ -19,6 +19,7 @@ interface PromptCategory {
 
 interface BatchPageProps {
     socket: Socket | null;
+    currentProjectId: string | null;
 }
 
 type PromptFocusTarget =
@@ -28,7 +29,7 @@ type PromptFocusTarget =
 const MAX_MULTI_PROMPT_IMAGES = 3;
 const MAX_MULTI_PROMPT_SHOTS = 6;
 
-const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
+const BatchPage: React.FC<BatchPageProps> = ({ socket, currentProjectId }) => {
     const [tasks, setTasks] = useState<BatchTask[]>([]);
     const [loading, setLoading] = useState(true);
     const [prompts, setPrompts] = useState<PromptCategory[]>([]);
@@ -36,9 +37,17 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
     const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
     const [promptFocusTarget, setPromptFocusTarget] = useState<PromptFocusTarget | null>(null);
     const middleImageInputsRef = useRef<Record<string, HTMLInputElement | null>>({});
+    const [scanStatus, setScanStatus] = useState<string | null>(null);
+    const [isScanningFolder, setIsScanningFolder] = useState(false);
 
     useEffect(() => {
-        fetch(`${API_BASE_URL}/api/batch/tasks`)
+        if (!currentProjectId) {
+            setTasks([]);
+            setLoading(false);
+            return;
+        }
+
+        fetch(`${API_BASE_URL}/api/batch/tasks?projectId=${encodeURIComponent(currentProjectId)}`)
             .then(res => res.json())
             .then(data => {
                 if (Array.isArray(data)) {
@@ -64,15 +73,20 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                 console.error('Failed to fetch prompts:', err);
                 setPrompts([]);
             });
-    }, []);
+    }, [currentProjectId]);
 
     useEffect(() => {
         if (socket) {
             socket.on('batch:add', (task: BatchTask) => {
+                if (task.project_id !== currentProjectId) return;
                 setTasks(prev => [task, ...prev]);
             });
             socket.on('batch:update', (task: BatchTask) => {
-                setTasks(prev => prev.map(t => t.id === task.id ? task : t));
+                if (task.project_id !== currentProjectId) return;
+                setTasks(prev => {
+                    const exists = prev.some(t => t.id === task.id);
+                    return exists ? prev.map(t => t.id === task.id ? task : t) : [task, ...prev];
+                });
             });
             socket.on('batch:delete', (data: { id: string }) => {
                 setTasks(prev => prev.filter(t => t.id !== data.id));
@@ -83,7 +97,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
                 socket.off('batch:delete');
             };
         }
-    }, [socket]);
+    }, [socket, currentProjectId]);
 
     const handleUpdateTask = (id: string, updates: Partial<BatchTask>) => {
         // Optimistic update
@@ -111,8 +125,33 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
     };
 
     const handleGenerateAll = () => {
-        fetch(`${API_BASE_URL}/api/batch/generate`, { method: 'POST' })
+        if (!currentProjectId) return;
+        fetch(`${API_BASE_URL}/api/batch/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ projectId: currentProjectId })
+        })
             .catch(err => console.error('Failed to start generation:', err));
+    };
+
+    const handleScanProjectVideos = async () => {
+        if (!currentProjectId || isScanningFolder) return;
+        setIsScanningFolder(true);
+        setScanStatus(null);
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/projects/${encodeURIComponent(currentProjectId)}/videos/scan`, {
+                method: 'POST'
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data.error || 'Failed to scan project video folder');
+            }
+            setScanStatus(`Scan complete: ${data.added || 0} added, ${data.updated || 0} updated.`);
+        } catch (err: any) {
+            setScanStatus(err.message || 'Failed to scan project video folder.');
+        } finally {
+            setIsScanningFolder(false);
+        }
     };
 
     const handleSelectPrompt = (prompt: string) => {
@@ -194,7 +233,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
         for (const file of filesToUpload) {
             const formData = new FormData();
             formData.append('file', file);
-            formData.append('projectId', 'default-project');
+            formData.append('projectId', currentProjectId || 'default-project');
 
             const res = await fetch(`${API_BASE_URL}/api/upload`, {
                 method: 'POST',
@@ -222,10 +261,27 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket }) => {
         <div style={{ display: 'flex', flex: 1, height: '100vh', background: '#0f0f0f' }}>
             <div style={{ flex: 1, overflowY: 'auto', padding: '40px', color: '#e0e0e0' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '32px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                        <h1 style={{ margin: 0, fontSize: '28px', fontWeight: 800, letterSpacing: '-0.5px' }}>Batch Management</h1>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+                        <div>
+                            <h1 style={{ margin: 0, fontSize: '28px', fontWeight: 800, letterSpacing: '-0.5px' }}>Batch Management</h1>
+                            <div style={{ marginTop: '8px', fontSize: '12px', color: '#7f8c8d' }}>
+                                Extra import path: `uploads/{'{projectId}'}/_videos`
+                            </div>
+                            {scanStatus && (
+                                <div style={{ marginTop: '8px', fontSize: '12px', color: '#9fd3ff' }}>{scanStatus}</div>
+                            )}
+                        </div>
                     </div>
                     <div style={{ display: 'flex', gap: '12px' }}>
+                        <button
+                            onClick={() => { handleScanProjectVideos().catch(err => console.error('Failed to scan project videos:', err)); }}
+                            style={{ background: 'rgba(255,255,255,0.06)', color: 'white', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '12px', padding: '12px 18px', fontSize: '15px', fontWeight: 600, cursor: isScanningFolder ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
+                            disabled={isScanningFolder}
+                            title="Scan uploads/{projectId}/_videos and import videos with ffmpeg thumbnails"
+                        >
+                            <FolderSearch size={18} />
+                            {isScanningFolder ? 'Scanning Folder...' : 'Scan Project Videos'}
+                        </button>
                         <button
                             onClick={handleGenerateAll}
                             style={{ background: '#3498db', color: 'white', border: 'none', borderRadius: '12px', padding: '12px 24px', fontSize: '16px', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 15px rgba(52, 152, 219, 0.3)' }}

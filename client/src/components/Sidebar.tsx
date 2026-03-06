@@ -1,8 +1,8 @@
+
 import React from 'react';
 import { API_BASE_URL } from '../config';
 import type { Page, Chapter, Project } from '../types';
-import { Clapperboard, Film } from 'lucide-react';
-
+import { Clapperboard, ExternalLink, Film } from 'lucide-react';
 
 interface SidebarProps {
     chapters: Chapter[];
@@ -11,7 +11,6 @@ interface SidebarProps {
     onAddChapter: () => void;
     onDeleteChapter: (id: string) => void;
     onRenameChapter: (id: string, newTitle: string) => void;
-
     pages: Page[];
     currentPageId: string | null;
     onSelectPage: (id: string) => void;
@@ -24,13 +23,100 @@ interface SidebarProps {
     onWidthChange: (width: number) => void;
     connectedUsers?: number;
     projects?: Project[];
+    currentView: 'canvas' | 'batch' | 'videos';
+    hasVideos: boolean;
+    onSelectVideos: () => void;
+    onOpenBatchManagement: () => void;
 }
+
+const modalOverlayStyle: React.CSSProperties = {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '100%',
+    background: 'rgba(0,0,0,0.8)',
+    zIndex: 2000,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '20px',
+    boxSizing: 'border-box',
+    textAlign: 'center'
+};
+
+const primaryButtonStyle: React.CSSProperties = {
+    padding: '8px 16px',
+    background: '#3498db',
+    color: 'white',
+    border: 'none',
+    borderRadius: '4px',
+    cursor: 'pointer'
+};
+
+const primaryDangerButtonStyle: React.CSSProperties = {
+    ...primaryButtonStyle,
+    background: '#e74c3c'
+};
+
+const secondaryButtonStyle: React.CSSProperties = {
+    padding: '8px 16px',
+    background: '#7f8c8d',
+    color: 'white',
+    border: 'none',
+    borderRadius: '4px',
+    cursor: 'pointer'
+};
+
+const listActionStyle: React.CSSProperties = {
+    padding: '10px',
+    borderRadius: '4px',
+    color: 'white',
+    cursor: 'pointer',
+    fontSize: '14px',
+    textAlign: 'left',
+    background: 'transparent',
+    marginBottom: '2px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center'
+};
+
 const Sidebar: React.FC<SidebarProps> = ({
-    chapters, currentChapterId, onSelectChapter, onAddChapter, onDeleteChapter, onRenameChapter,
-    pages, currentPageId, onSelectPage, onAddPage, onRenamePage, isCollapsed, onToggle, onRefresh,
-    width, onWidthChange, connectedUsers = 1, projects = []
+    chapters,
+    currentChapterId,
+    onSelectChapter,
+    onAddChapter,
+    onDeleteChapter,
+    onRenameChapter,
+    pages,
+    currentPageId,
+    onSelectPage,
+    onAddPage,
+    onRenamePage,
+    isCollapsed,
+    onToggle,
+    onRefresh,
+    width,
+    onWidthChange,
+    connectedUsers = 1,
+    projects = [],
+    currentView,
+    hasVideos,
+    onSelectVideos,
+    onOpenBatchManagement
 }) => {
     const [isResizing, setIsResizing] = React.useState(false);
+    const [editingChapterId, setEditingChapterId] = React.useState<string | null>(null);
+    const [editChapterTitle, setEditChapterTitle] = React.useState('');
+    const [editingPageId, setEditingPageId] = React.useState<string | null>(null);
+    const [editTitle, setEditTitle] = React.useState('');
+    const [draggedPageId, setDraggedPageId] = React.useState<string | null>(null);
+    const [pageToDelete, setPageToDelete] = React.useState<string | null>(null);
+    const [pageToDuplicate, setPageToDuplicate] = React.useState<string | null>(null);
+    const [chapterToDelete, setChapterToDelete] = React.useState<string | null>(null);
+    const [movingPageId, setMovingPageId] = React.useState<string | null>(null);
 
     const startResizing = React.useCallback((e: React.MouseEvent) => {
         e.preventDefault();
@@ -42,11 +128,10 @@ const Sidebar: React.FC<SidebarProps> = ({
     }, []);
 
     const resize = React.useCallback((e: MouseEvent) => {
-        if (isResizing) {
-            const newWidth = e.clientX;
-            if (newWidth >= 150 && newWidth <= 600) {
-                onWidthChange(newWidth);
-            }
+        if (!isResizing) return;
+        const newWidth = e.clientX;
+        if (newWidth >= 150 && newWidth <= 600) {
+            onWidthChange(newWidth);
         }
     }, [isResizing, onWidthChange]);
 
@@ -54,25 +139,12 @@ const Sidebar: React.FC<SidebarProps> = ({
         if (isResizing) {
             window.addEventListener('mousemove', resize);
             window.addEventListener('mouseup', stopResizing);
-        } else {
-            window.removeEventListener('mousemove', resize);
-            window.removeEventListener('mouseup', stopResizing);
         }
         return () => {
             window.removeEventListener('mousemove', resize);
             window.removeEventListener('mouseup', stopResizing);
         };
     }, [isResizing, resize, stopResizing]);
-
-    const [editingChapterId, setEditingChapterId] = React.useState<string | null>(null);
-    const [editChapterTitle, setEditChapterTitle] = React.useState('');
-    const [editingPageId, setEditingPageId] = React.useState<string | null>(null);
-    const [editTitle, setEditTitle] = React.useState('');
-    const [draggedPageId, setDraggedPageId] = React.useState<string | null>(null);
-    const [pageToDelete, setPageToDelete] = React.useState<string | null>(null);
-    const [pageToDuplicate, setPageToDuplicate] = React.useState<string | null>(null);
-    const [chapterToDelete, setChapterToDelete] = React.useState<string | null>(null);
-    const [movingPageId, setMovingPageId] = React.useState<string | null>(null);
 
     const handleMovePageToChapter = async (pageId: string, chapterId: string, e: React.MouseEvent) => {
         e.stopPropagation();
@@ -82,39 +154,38 @@ const Sidebar: React.FC<SidebarProps> = ({
             body: JSON.stringify({ chapterId })
         });
         setMovingPageId(null);
-        if (onRefresh) onRefresh();
+        onRefresh?.();
     };
 
     const confirmDuplicatePage = async () => {
         if (!pageToDuplicate) return;
         await fetch(`${API_BASE_URL}/api/pages/duplicate`, {
-
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ pageId: pageToDuplicate })
         });
         setPageToDuplicate(null);
-        if (onRefresh) onRefresh();
+        onRefresh?.();
     };
 
     const handleMovePage = async (pageId: string, direction: 'up' | 'down', e: React.MouseEvent) => {
         e.stopPropagation();
-        const index = pages.findIndex(p => p.id === pageId);
+        const index = pages.findIndex((page) => page.id === pageId);
         if (index === -1) return;
         if (direction === 'up' && index === 0) return;
         if (direction === 'down' && index === pages.length - 1) return;
 
-        const newPages = [...pages];
+        const reorderedPages = [...pages];
         const swapIndex = direction === 'up' ? index - 1 : index + 1;
-        [newPages[index], newPages[swapIndex]] = [newPages[swapIndex], newPages[index]];
+        [reorderedPages[index], reorderedPages[swapIndex]] = [reorderedPages[swapIndex], reorderedPages[index]];
 
         await fetch(`${API_BASE_URL}/api/pages/reorder`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ order: newPages.map(p => p.id) })
+            body: JSON.stringify({ order: reorderedPages.map((page) => page.id) })
         });
 
-        if (onRefresh) onRefresh();
+        onRefresh?.();
     };
 
     const handleDragStart = (e: React.DragEvent, id: string) => {
@@ -131,34 +202,29 @@ const Sidebar: React.FC<SidebarProps> = ({
         e.preventDefault();
         if (!draggedPageId || draggedPageId === targetId) return;
 
-        const originalIndex = pages.findIndex(p => p.id === draggedPageId);
-        const targetIndex = pages.findIndex(p => p.id === targetId);
-
+        const originalIndex = pages.findIndex((page) => page.id === draggedPageId);
+        const targetIndex = pages.findIndex((page) => page.id === targetId);
         if (originalIndex === -1 || targetIndex === -1) return;
 
-        const newPages = [...pages];
-        const [draggedItem] = newPages.splice(originalIndex, 1);
-        newPages.splice(targetIndex, 0, draggedItem);
+        const reorderedPages = [...pages];
+        const [draggedItem] = reorderedPages.splice(originalIndex, 1);
+        reorderedPages.splice(targetIndex, 0, draggedItem);
 
         await fetch(`${API_BASE_URL}/api/pages/reorder`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ order: newPages.map(p => p.id) })
+            body: JSON.stringify({ order: reorderedPages.map((page) => page.id) })
         });
 
-
         setDraggedPageId(null);
-        if (onRefresh) onRefresh();
+        onRefresh?.();
     };
 
     const confirmDeletePage = async () => {
         if (!pageToDelete) return;
-        await fetch(`${API_BASE_URL}/api/pages/${pageToDelete}`, {
-
-            method: 'DELETE'
-        });
+        await fetch(`${API_BASE_URL}/api/pages/${pageToDelete}`, { method: 'DELETE' });
         setPageToDelete(null);
-        if (onRefresh) onRefresh();
+        onRefresh?.();
     };
 
     const confirmDeleteChapter = () => {
@@ -167,6 +233,8 @@ const Sidebar: React.FC<SidebarProps> = ({
         setChapterToDelete(null);
     };
 
+    const isVideosActive = currentView === 'videos';
+    const showPagesPanel = currentView !== 'videos';
 
     return (
         <div style={{
@@ -200,8 +268,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                         background: isResizing ? 'var(--accent-color)' : 'transparent',
                         transition: 'background 0.2s'
                     }}
-                    onMouseEnter={e => !isResizing && (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
-                    onMouseLeave={e => !isResizing && (e.currentTarget.style.background = 'transparent')}
                 />
             )}
             {!isCollapsed && (
@@ -220,14 +286,13 @@ const Sidebar: React.FC<SidebarProps> = ({
                         opacity: 0.6,
                         transition: 'opacity 0.2s'
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
-                    onMouseLeave={(e) => (e.currentTarget.style.opacity = '0.6')}
+                    onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.6'; }}
                 >
-                    ≪
+                    {'<<'}
                 </button>
             )}
 
-            {/* APP TITLE */}
             <div
                 onClick={isCollapsed ? onToggle : undefined}
                 style={{
@@ -241,8 +306,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                     cursor: isCollapsed ? 'pointer' : 'default',
                     transition: 'transform 0.2s'
                 }}
-                onMouseEnter={(e) => isCollapsed && (e.currentTarget.style.transform = 'scale(1.1)')}
-                onMouseLeave={(e) => isCollapsed && (e.currentTarget.style.transform = 'scale(1)')}
             >
                 <Clapperboard size={24} color="var(--accent-color)" />
                 {!isCollapsed && (
@@ -258,7 +321,6 @@ const Sidebar: React.FC<SidebarProps> = ({
                 )}
             </div>
 
-            {/* CHAPTERS SECTION */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginTop: '30px' }}>
                 {!isCollapsed && (
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -275,7 +337,64 @@ const Sidebar: React.FC<SidebarProps> = ({
                 )}
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                    {chapters.map(chapter => (
+                    {hasVideos && (
+                        <div
+                            onClick={onSelectVideos}
+                            title="Videos"
+                            style={{
+                                padding: '8px 10px',
+                                background: isVideosActive ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
+                                borderLeft: isVideosActive ? '3px solid var(--accent-color)' : '3px solid transparent',
+                                cursor: 'pointer',
+                                fontSize: '14px',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                borderRadius: '0 4px 4px 0'
+                            }}
+                        >
+                            {isCollapsed ? (
+                                <Film size={16} color={isVideosActive ? 'var(--accent-color)' : '#555'} />
+                            ) : (
+                                <>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                                        <Film size={14} color="var(--accent-color)" />
+                                        <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>Videos</span>
+                                    </div>
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            onOpenBatchManagement();
+                                        }}
+                                        title="Open Batch Management"
+                                        style={{
+                                            background: 'transparent',
+                                            border: 'none',
+                                            color: '#9cb3c9',
+                                            cursor: 'pointer',
+                                            display: 'grid',
+                                            placeItems: 'center',
+                                            width: '24px',
+                                            height: '24px',
+                                            borderRadius: '6px'
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            e.currentTarget.style.background = 'rgba(52, 152, 219, 0.18)';
+                                            e.currentTarget.style.color = '#fff';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            e.currentTarget.style.background = 'transparent';
+                                            e.currentTarget.style.color = '#9cb3c9';
+                                        }}
+                                    >
+                                        <ExternalLink size={14} />
+                                    </button>
+                                </>
+                            )}
+                        </div>
+                    )}
+
+                    {chapters.map((chapter) => (
                         <div
                             key={chapter.id}
                             onClick={() => !editingChapterId && onSelectChapter(chapter.id)}
@@ -287,8 +406,8 @@ const Sidebar: React.FC<SidebarProps> = ({
                             }}
                             style={{
                                 padding: '8px 10px',
-                                background: currentChapterId === chapter.id ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
-                                borderLeft: currentChapterId === chapter.id ? '3px solid var(--accent-color)' : '3px solid transparent',
+                                background: currentView === 'canvas' && currentChapterId === chapter.id ? 'rgba(255, 255, 255, 0.1)' : 'transparent',
+                                borderLeft: currentView === 'canvas' && currentChapterId === chapter.id ? '3px solid var(--accent-color)' : '3px solid transparent',
                                 cursor: 'pointer',
                                 fontSize: '14px',
                                 display: 'flex',
@@ -297,97 +416,106 @@ const Sidebar: React.FC<SidebarProps> = ({
                                 borderRadius: '0 4px 4px 0'
                             }}
                         >
-                            {!isCollapsed && (
+                            {isCollapsed ? (
+                                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: currentView === 'canvas' && currentChapterId === chapter.id ? 'var(--accent-color)' : '#555', margin: '0 auto' }} />
+                            ) : editingChapterId === chapter.id ? (
+                                <input
+                                    autoFocus
+                                    value={editChapterTitle}
+                                    onChange={(e) => setEditChapterTitle(e.target.value)}
+                                    onBlur={() => {
+                                        if (editChapterTitle.trim() && editChapterTitle !== chapter.title) {
+                                            onRenameChapter(chapter.id, editChapterTitle);
+                                        }
+                                        setEditingChapterId(null);
+                                    }}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            if (editChapterTitle.trim() && editChapterTitle !== chapter.title) {
+                                                onRenameChapter(chapter.id, editChapterTitle);
+                                            }
+                                            setEditingChapterId(null);
+                                        } else if (e.key === 'Escape') {
+                                            setEditingChapterId(null);
+                                        }
+                                    }}
+                                    style={{
+                                        flex: 1,
+                                        background: 'transparent',
+                                        border: 'none',
+                                        color: 'white',
+                                        outline: 'none',
+                                        fontSize: 'inherit',
+                                        padding: '0'
+                                    }}
+                                />
+                            ) : (
                                 <>
-                                    {editingChapterId === chapter.id ? (
-                                        <input
-                                            autoFocus
-                                            value={editChapterTitle}
-                                            onChange={(e) => setEditChapterTitle(e.target.value)}
-                                            onBlur={() => {
-                                                if (editChapterTitle.trim() && editChapterTitle !== chapter.title) {
-                                                    onRenameChapter(chapter.id, editChapterTitle);
-                                                }
-                                                setEditingChapterId(null);
-                                            }}
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter') {
-                                                    if (editChapterTitle.trim() && editChapterTitle !== chapter.title) {
-                                                        onRenameChapter(chapter.id, editChapterTitle);
-                                                    }
-                                                    setEditingChapterId(null);
-                                                } else if (e.key === 'Escape') {
-                                                    setEditingChapterId(null);
-                                                }
-                                            }}
-                                            style={{
-                                                flex: 1,
-                                                background: 'transparent',
-                                                border: 'none',
-                                                color: 'white',
-                                                outline: 'none',
-                                                fontSize: 'inherit',
-                                                padding: '0'
-                                            }}
-                                        />
-                                    ) : (
-                                        <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{chapter.title}</span>
-                                    )}
-                                    {!editingChapterId && (
-                                        <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); setChapterToDelete(chapter.id); }} style={{ background: 'none', border: 'none', color: '#e74c3c', cursor: 'pointer', opacity: 0.6 }} title="Delete Chapter" onMouseEnter={e => e.currentTarget.style.opacity = '1'} onMouseLeave={e => e.currentTarget.style.opacity = '0.6'}>×</button>
-                                    )}
+                                    <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{chapter.title}</span>
+                                    <button
+                                        onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            setChapterToDelete(chapter.id);
+                                        }}
+                                        style={{ background: 'none', border: 'none', color: '#e74c3c', cursor: 'pointer', opacity: 0.6 }}
+                                        title="Delete Chapter"
+                                        onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
+                                        onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.6'; }}
+                                    >
+                                        x
+                                    </button>
                                 </>
-                            )}
-                            {isCollapsed && (
-                                <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: currentChapterId === chapter.id ? 'var(--accent-color)' : '#555', margin: '0 auto' }}></div>
                             )}
                         </div>
                     ))}
                 </div>
             </div>
 
-            <div style={{ width: '100%', height: '1px', background: 'rgba(255,255,255,0.1)', margin: '5px 0' }}></div>
+            <div style={{ width: '100%', height: '1px', background: 'rgba(255,255,255,0.1)', margin: '5px 0' }} />
 
-
-            {!isCollapsed ? (
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                    <h2 style={{
-                        margin: '0',
-                        fontSize: '14px',
-                        fontWeight: 600,
-                        letterSpacing: '0.05em',
-                        textTransform: 'uppercase',
-                        opacity: 0.6
-                    }}>Pages</h2>
-                    <button onClick={onAddPage} style={{ background: 'none', border: 'none', color: 'var(--accent-color)', cursor: 'pointer', fontWeight: 'bold', fontSize: '18px' }}>+</button>
-                </div>
-            ) : (
-                <button
-                    onClick={onAddPage}
-                    style={{
-                        background: 'none',
-                        border: 'none',
-                        color: 'var(--accent-color)',
-                        cursor: 'pointer',
-                        fontWeight: 'bold',
-                        fontSize: '18px',
-                        marginBottom: '10px',
-                        width: '100%',
-                        textAlign: 'center'
-                    }}
-                    title="Add Page"
-                >
-                    +
-                </button>
+            {showPagesPanel && (
+                <>
+                    {!isCollapsed ? (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                            <h2 style={{
+                                margin: '0',
+                                fontSize: '14px',
+                                fontWeight: 600,
+                                letterSpacing: '0.05em',
+                                textTransform: 'uppercase',
+                                opacity: 0.6
+                            }}>Pages</h2>
+                            <button onClick={onAddPage} style={{ background: 'none', border: 'none', color: 'var(--accent-color)', cursor: 'pointer', fontWeight: 'bold', fontSize: '18px' }}>+</button>
+                        </div>
+                    ) : (
+                        <button
+                            onClick={onAddPage}
+                            style={{
+                                background: 'none',
+                                border: 'none',
+                                color: 'var(--accent-color)',
+                                cursor: 'pointer',
+                                fontWeight: 'bold',
+                                fontSize: '18px',
+                                marginBottom: '10px',
+                                width: '100%',
+                                textAlign: 'center'
+                            }}
+                            title="Add Page"
+                        >
+                            +
+                        </button>
+                    )}
+                </>
             )}
-
             <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                {pages.map((page, index) => (
+                {showPagesPanel ? pages.map((page, index) => (
                     <div
                         key={page.id}
                         onClick={() => !editingPageId && onSelectPage(page.id)}
                         onDoubleClick={() => {
-                            if (!isCollapsed && page.type !== 'videos') {
+                            if (!isCollapsed) {
                                 setEditingPageId(page.id);
                                 setEditTitle(page.title);
                             }
@@ -412,7 +540,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                             position: 'relative',
                             opacity: draggedPageId === page.id ? 0.5 : 1
                         }}
-                        draggable={!editingPageId && page.type !== 'videos'}
+                        draggable={!editingPageId}
                         onDragStart={(e) => handleDragStart(e, page.id)}
                         onDragOver={handleDragOver}
                         onDrop={(e) => handleDrop(e, page.id)}
@@ -423,22 +551,19 @@ const Sidebar: React.FC<SidebarProps> = ({
                             if (currentPageId !== page.id) e.currentTarget.style.background = 'transparent';
                         }}
                     >
-                        {isCollapsed ? (
-                            index + 1
-                        ) : (
+                        {isCollapsed ? index + 1 : (
                             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', width: '100%' }}>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginRight: '5px' }}>
                                     <button
-                                        onClick={(e) => { handleMovePage(page.id, 'up', e); if (onRefresh) onRefresh(); }}
+                                        onClick={(e) => handleMovePage(page.id, 'up', e)}
                                         style={{ fontSize: '8px', cursor: 'pointer', background: 'none', border: 'none', color: '#aaa' }}
-                                    >▲</button>
+                                    >^</button>
                                     <button
-                                        onClick={(e) => { handleMovePage(page.id, 'down', e); if (onRefresh) onRefresh(); }}
+                                        onClick={(e) => handleMovePage(page.id, 'down', e)}
                                         style={{ fontSize: '8px', cursor: 'pointer', background: 'none', border: 'none', color: '#aaa' }}
-                                    >▼</button>
+                                    >v</button>
                                 </div>
-                                <div style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    {page.type === 'videos' && <Film size={14} color="var(--accent-color)" />}
+                                <div style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                                     {editingPageId === page.id ? (
                                         <input
                                             autoFocus
@@ -470,158 +595,66 @@ const Sidebar: React.FC<SidebarProps> = ({
                                                 padding: '0'
                                             }}
                                         />
-                                    ) : (
-                                        page.title
-                                    )}
+                                    ) : page.title}
                                 </div>
-                                {page.type !== 'videos' && (
-                                    <>
-                                        <div style={{ display: 'flex' }}>
-                                            <button
-                                                onClick={(e) => { e.stopPropagation(); setMovingPageId(page.id); }}
-                                                title="Move to Chapter"
-                                                style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#aaa', fontSize: '14px', padding: '0 4px' }}
-                                            >
-                                                ➔
-                                            </button>
-                                        </div>
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); setPageToDuplicate(page.id); }}
-                                            title="Duplicate"
-                                            style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#aaa', fontSize: '16px' }}
-                                        >
-                                            ❐
-                                        </button>
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); setPageToDelete(page.id); }}
-                                            title="Delete"
-                                            style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#e74c3c', fontSize: '14px', marginLeft: '2px' }}
-                                        >
-                                            ×
-                                        </button>
-                                    </>
-                                )}
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setMovingPageId(page.id);
+                                    }}
+                                    title="Move to Chapter"
+                                    style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#aaa', fontSize: '14px', padding: '0 4px' }}
+                                >
+                                    {'>'}
+                                </button>
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setPageToDuplicate(page.id);
+                                    }}
+                                    title="Duplicate"
+                                    style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#aaa', fontSize: '16px' }}
+                                >
+                                    *
+                                </button>
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setPageToDelete(page.id);
+                                    }}
+                                    title="Delete"
+                                    style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#e74c3c', fontSize: '14px', marginLeft: '2px' }}
+                                >
+                                    x
+                                </button>
                             </div>
                         )}
                     </div>
-                ))}
+                )) : null}
             </div>
 
             {pageToDelete && (
-                <div style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: '100%',
-                    background: 'rgba(0,0,0,0.8)',
-                    zIndex: 2000,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: '20px',
-                    boxSizing: 'border-box',
-                    textAlign: 'center'
-                }}>
+                <div style={modalOverlayStyle}>
                     <h3 style={{ color: 'white', marginBottom: '20px' }}>Are you sure?</h3>
                     <div style={{ display: 'flex', gap: '10px' }}>
-                        <button
-                            onClick={confirmDeletePage}
-                            style={{
-                                padding: '8px 16px',
-                                background: '#e74c3c',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                cursor: 'pointer'
-                            }}
-                        >
-                            Yes
-                        </button>
-                        <button
-                            onClick={() => setPageToDelete(null)}
-                            style={{
-                                padding: '8px 16px',
-                                background: '#7f8c8d',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                cursor: 'pointer'
-                            }}
-                        >
-                            No
-                        </button>
+                        <button onClick={confirmDeletePage} style={primaryDangerButtonStyle}>Yes</button>
+                        <button onClick={() => setPageToDelete(null)} style={secondaryButtonStyle}>No</button>
                     </div>
                 </div>
             )}
 
             {pageToDuplicate && (
-                <div style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: '100%',
-                    background: 'rgba(0,0,0,0.8)',
-                    zIndex: 2000,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: '20px',
-                    boxSizing: 'border-box',
-                    textAlign: 'center'
-                }}>
+                <div style={modalOverlayStyle}>
                     <h3 style={{ color: 'white', marginBottom: '20px' }}>Duplicate Page?</h3>
                     <div style={{ display: 'flex', gap: '10px' }}>
-                        <button
-                            onClick={confirmDuplicatePage}
-                            style={{
-                                padding: '8px 16px',
-                                background: '#3498db',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                cursor: 'pointer'
-                            }}
-                        >
-                            Yes
-                        </button>
-                        <button
-                            onClick={() => setPageToDuplicate(null)}
-                            style={{
-                                padding: '8px 16px',
-                                background: '#7f8c8d',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                cursor: 'pointer'
-                            }}
-                        >
-                            No
-                        </button>
+                        <button onClick={confirmDuplicatePage} style={primaryButtonStyle}>Yes</button>
+                        <button onClick={() => setPageToDuplicate(null)} style={secondaryButtonStyle}>No</button>
                     </div>
                 </div>
             )}
 
             {movingPageId && (
-                <div style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: '100%',
-                    background: 'rgba(0,0,0,0.8)',
-                    zIndex: 2000,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: '20px',
-                    boxSizing: 'border-box',
-                    textAlign: 'center'
-                }}>
+                <div style={modalOverlayStyle}>
                     <h3 style={{ color: 'white', marginBottom: '10px' }}>Move Page?</h3>
                     <p style={{ color: '#aaa', fontSize: '0.9em', marginBottom: '10px' }}>Move to Chapter (Current Project):</p>
                     <div style={{
@@ -633,37 +666,24 @@ const Sidebar: React.FC<SidebarProps> = ({
                         marginBottom: '20px',
                         padding: '5px'
                     }}>
-                        {chapters.map(ch => (
+                        {chapters.map((chapter) => (
                             <div
-                                key={ch.id}
-                                onClick={(e) => handleMovePageToChapter(movingPageId, ch.id, e)}
-                                style={{
-                                    padding: '10px',
-                                    borderRadius: '4px',
-                                    color: 'white',
-                                    cursor: 'pointer',
-                                    fontSize: '14px',
-                                    textAlign: 'left',
-                                    background: 'transparent',
-                                    marginBottom: '2px',
-                                    display: 'flex',
-                                    justifyContent: 'space-between',
-                                    alignItems: 'center'
-                                }}
-                                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
-                                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                                key={chapter.id}
+                                onClick={(e) => handleMovePageToChapter(movingPageId, chapter.id, e)}
+                                style={listActionStyle}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.1)'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
                             >
-                                {ch.title}
-                                {pages.find(p => p.id === movingPageId)?.chapter_id === ch.id && (
+                                {chapter.title}
+                                {pages.find((page) => page.id === movingPageId)?.chapter_id === chapter.id && (
                                     <span style={{ fontSize: '10px', color: 'var(--accent-color)' }}>(current)</span>
                                 )}
                             </div>
                         ))}
                     </div>
-
-                    {projects && projects.length > 1 && (
+                    {projects.length > 1 && (
                         <>
-                            <div style={{ width: '100%', height: '1px', background: 'rgba(255,255,255,0.1)', marginBottom: '10px' }}></div>
+                            <div style={{ width: '100%', height: '1px', background: 'rgba(255,255,255,0.1)', marginBottom: '10px' }} />
                             <p style={{ color: '#aaa', fontSize: '0.9em', marginBottom: '10px' }}>OR Move to Another Project:</p>
                             <div style={{
                                 width: '100%',
@@ -674,110 +694,43 @@ const Sidebar: React.FC<SidebarProps> = ({
                                 marginBottom: '20px',
                                 padding: '5px'
                             }}>
-                                {projects.map(proj => {
-                                    // Let's rely on user not selecting current or backend handling it.
-                                    return (
-                                        <div
-                                            key={proj.id}
-                                            onClick={async (e) => {
-                                                e.stopPropagation();
-                                                if (confirm(`Move page to project "${proj.name}"?\nNote: Images/Videos might not be visible if source project is deleted.`)) {
-                                                    await fetch(`${API_BASE_URL}/api/pages/${movingPageId}/move-project`, {
-                                                        method: 'POST',
-                                                        headers: { 'Content-Type': 'application/json' },
-                                                        body: JSON.stringify({ targetProjectId: proj.id })
-                                                    });
-                                                    setMovingPageId(null);
-                                                    if (onRefresh) onRefresh();
-                                                }
-                                            }}
-                                            style={{
-                                                padding: '10px',
-                                                borderRadius: '4px',
-                                                color: 'white',
-                                                cursor: 'pointer',
-                                                fontSize: '14px',
-                                                textAlign: 'left',
-                                                background: 'transparent',
-                                                marginBottom: '2px',
-                                                display: 'flex',
-                                                justifyContent: 'space-between',
-                                                alignItems: 'center'
-                                            }}
-                                            onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
-                                            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                                        >
-                                            {proj.name}
-                                        </div>
-                                    );
-                                })}
+                                {projects.map((project) => (
+                                    <div
+                                        key={project.id}
+                                        onClick={async (e) => {
+                                            e.stopPropagation();
+                                            if (confirm(`Move page to project "${project.name}"?\nNote: Images and videos might not be visible if source project is deleted.`)) {
+                                                await fetch(`${API_BASE_URL}/api/pages/${movingPageId}/move-project`, {
+                                                    method: 'POST',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify({ targetProjectId: project.id })
+                                                });
+                                                setMovingPageId(null);
+                                                onRefresh?.();
+                                            }
+                                        }}
+                                        style={listActionStyle}
+                                        onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.1)'; }}
+                                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                    >
+                                        {project.name}
+                                    </div>
+                                ))}
                             </div>
                         </>
                     )}
 
-                    <button
-                        onClick={() => setMovingPageId(null)}
-                        style={{
-                            padding: '8px 16px',
-                            background: '#7f8c8d',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer',
-                            width: '100%'
-                        }}
-                    >
-                        Cancel
-                    </button>
+                    <button onClick={() => setMovingPageId(null)} style={{ ...secondaryButtonStyle, width: '100%' }}>Cancel</button>
                 </div>
             )}
 
             {chapterToDelete && (
-                <div style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: '100%',
-                    background: 'rgba(0,0,0,0.8)',
-                    zIndex: 2000,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: '20px',
-                    boxSizing: 'border-box',
-                    textAlign: 'center'
-                }}>
+                <div style={modalOverlayStyle}>
                     <h3 style={{ color: 'white', marginBottom: '20px', fontSize: '1.2em' }}>Delete Chapter?</h3>
                     <p style={{ color: '#aaa', fontSize: '0.9em', marginBottom: '20px' }}>This will delete all pages in this chapter.</p>
                     <div style={{ display: 'flex', gap: '10px' }}>
-                        <button
-                            onClick={confirmDeleteChapter}
-                            style={{
-                                padding: '8px 16px',
-                                background: '#e74c3c',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                cursor: 'pointer'
-                            }}
-                        >
-                            Yes
-                        </button>
-                        <button
-                            onClick={() => setChapterToDelete(null)}
-                            style={{
-                                padding: '8px 16px',
-                                background: '#7f8c8d',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '4px',
-                                cursor: 'pointer'
-                            }}
-                        >
-                            No
-                        </button>
+                        <button onClick={confirmDeleteChapter} style={primaryDangerButtonStyle}>Yes</button>
+                        <button onClick={() => setChapterToDelete(null)} style={secondaryButtonStyle}>No</button>
                     </div>
                 </div>
             )}
@@ -800,17 +753,11 @@ const Sidebar: React.FC<SidebarProps> = ({
                         alignItems: 'center',
                         gap: '6px'
                     }}>
-                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#2ecc71' }}></span>
+                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#2ecc71' }} />
                         viewer(s) : {connectedUsers}
                     </div>
                 ) : (
-                    <div style={{
-                        fontSize: '12px',
-                        color: '#2ecc71',
-                        fontWeight: 'bold'
-                    }}>
-                        {connectedUsers}
-                    </div>
+                    <div style={{ fontSize: '12px', color: '#2ecc71', fontWeight: 'bold' }}>{connectedUsers}</div>
                 )}
             </div>
         </div>

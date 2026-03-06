@@ -26,6 +26,37 @@ interface RawElement extends Partial<Element> {
     content: string | Record<string, unknown>;
 }
 
+const areNumberArraysEqual = (a?: number[], b?: number[]) => {
+    if (a === b) return true;
+    if (!a || !b || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+        if (a[i] !== b[i]) return false;
+    }
+    return true;
+};
+
+const mergeDefinedFields = <T extends object>(...sources: Array<Partial<T> | undefined>) => {
+    const merged: Partial<T> = {};
+    sources.forEach((source) => {
+        if (!source) return;
+        Object.entries(source).forEach(([key, value]) => {
+            if (value !== undefined) {
+                (merged as Record<string, unknown>)[key] = value;
+            }
+        });
+    });
+    return merged;
+};
+
+const hasElementPatchChanges = (element: Element, patch: Partial<Element>) =>
+    Object.entries(patch).some(([key, value]) => {
+        const currentValue = (element as unknown as Record<string, unknown>)[key];
+        if (key === 'points') {
+            return !areNumberArraysEqual(currentValue as number[] | undefined, value as number[] | undefined);
+        }
+        return currentValue !== value;
+    });
+
 const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidth, chapters, allPages, onSelectPage, onOpenBatchManagement, socket, currentProjectId }) => {
 
 
@@ -56,11 +87,13 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     const elementsRef = useRef(elements);
     const selectedIdsRef = useRef(selectedIds);
     const historyRef = useRef(history);
+    const pageIdRef = useRef(pageId);
 
     // Keep refs in sync
     elementsRef.current = elements;
     selectedIdsRef.current = selectedIds;
     historyRef.current = history;
+    pageIdRef.current = pageId;
 
     // Selection Box State
     const [selectionBox, setSelectionBox] = useState<{ x: number, y: number, width: number, height: number } | null>(null);
@@ -79,7 +112,18 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     const [ratingFilter, setRatingFilter] = useState(0);
     const [contextMenu, setContextMenu] = useState<{ x: number, y: number, elementId: string } | null>(null);
     const [middleMenuDisabledReason, setMiddleMenuDisabledReason] = useState<string | null>(null);
+    const [videoModal, setVideoModal] = useState<{ url: string; title?: string } | null>(null);
+    const isMountedRef = useRef(true);
+    const uploadCleanupTimersRef = useRef<number[]>([]);
     const gridSize = 20;
+
+    useEffect(() => {
+        return () => {
+            isMountedRef.current = false;
+            uploadCleanupTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+            uploadCleanupTimersRef.current = [];
+        };
+    }, []);
 
     // Viewport Persistence Helpers
     const saveViewport = (id: string, x: number, y: number, scale: number) => {
@@ -114,6 +158,19 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     const saveToHistory = useCallback(() => {
         setHistory(prev => [...prev.slice(-19), elementsRef.current]);
         setRedoStack([]);
+    }, []);
+
+    const applyElementPatch = useCallback((id: string, patch: Partial<Element>) => {
+        setElements((prev) => {
+            let changed = false;
+            const next = prev.map((el) => {
+                if (el.id !== id) return el;
+                if (!hasElementPatchChanges(el, patch)) return el;
+                changed = true;
+                return { ...el, ...patch };
+            });
+            return changed ? next : prev;
+        });
     }, []);
 
 
@@ -165,48 +222,22 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     }, [pageId, loadViewport]);
 
     useEffect(() => {
-        const currentPage = allPages.find(p => p.id === pageId);
-        if (pageId && currentPage?.type === 'videos') {
-            fetch(`${API_BASE_URL}/api/videos/sync`, { method: 'POST' })
-                .then(res => res.json())
-                .then(data => {
-                    if (data.added > 0) {
-                        console.log(`✅ Synced ${data.added} new videos to canvas`);
-                    }
-                })
-                .catch(err => console.error('Failed to sync videos:', err));
-        }
-    }, [pageId, allPages]);
-
-    useEffect(() => {
         if (!socket) return;
 
-        socket.on('element:move', (data: { id: string, x: number, y: number }) => {
-            setElements((prev: Element[]) =>
-                prev.map((el: Element) => (el.id === data.id ? { ...el, x: data.x, y: data.y } : el))
-            );
-        });
+        const handleSocketMove = (data: { id: string, x: number, y: number }) => {
+            applyElementPatch(data.id, { x: data.x, y: data.y });
+        };
 
-        socket.on('element:update', (data: { id: string, content?: Record<string, unknown> } & Partial<Element>) => {
-            setElements((prev: Element[]) => {
-                return prev.map((el: Element) => {
-                    if (el.id === data.id) {
-                        // Merge content if present, plus any top-level fields
-                        const { content, ...otherFields } = data;
-                        return {
-                            ...el,
-                            ...(content || {}),
-                            ...otherFields
-                        };
-                    }
-                    return el;
-                });
-            });
-        });
+        const handleSocketUpdate = (data: { id: string, content?: Record<string, unknown> } & Partial<Element>) => {
+            const { content, id, ...otherFields } = data;
+            const patch = mergeDefinedFields<Element>(content as Partial<Element> | undefined, otherFields);
+            if (Object.keys(patch).length === 0) return;
+            applyElementPatch(id, patch);
+        };
 
-        socket.on('element:add', (data: Element & { content: Record<string, unknown>, pageId: string }) => {
+        const handleSocketAdd = (data: Element & { content: Record<string, unknown>, pageId: string }) => {
             console.log('📥 Client received element:add:', data.id, 'for page:', data.pageId, 'current page:', pageId);
-            if (data.pageId !== pageId) {
+            if (data.pageId !== pageIdRef.current) {
                 console.log('⏭️ Skipping element:add - different page');
                 return;
             }
@@ -218,9 +249,9 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 console.log('✅ Adding new element to canvas');
                 return [...prev, { ...data, ...data.content }];
             });
-        });
+        };
 
-        socket.on('element:delete', (data: { id: string }) => {
+        const handleSocketDelete = (data: { id: string }) => {
             setElements((prev: Element[]) => {
                 // Only delete if the element exists in current page
                 const elementExists = prev.some(el => el.id === data.id);
@@ -231,25 +262,35 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 console.log('🗑️ Deleting element:', data.id);
                 return prev.filter(el => el.id !== data.id);
             });
-            if (selectedId === data.id) setSelectedId(null);
-        });
+            if (selectedIdsRef.current.includes(data.id)) {
+                setSelectedIds(prev => prev.filter(id => id !== data.id));
+            }
+        };
 
-        socket.on('element:reorder', (data: { pageId: string, order: string[] }) => {
-            if (data.pageId !== pageId) return;
+        const handleSocketReorder = (data: { pageId: string, order: string[] }) => {
+            if (data.pageId !== pageIdRef.current) return;
             setElements(prev => {
                 const elementMap = new Map(prev.map(el => [el.id, el]));
-                return data.order.map(id => elementMap.get(id)).filter(Boolean) as Element[];
+                const reordered = data.order.map(id => elementMap.get(id)).filter(Boolean) as Element[];
+                const unchanged = reordered.length === prev.length && reordered.every((el, index) => el === prev[index]);
+                return unchanged ? prev : reordered;
             });
-        });
+        };
+
+        socket.on('element:move', handleSocketMove);
+        socket.on('element:update', handleSocketUpdate);
+        socket.on('element:add', handleSocketAdd);
+        socket.on('element:delete', handleSocketDelete);
+        socket.on('element:reorder', handleSocketReorder);
 
         return () => {
-            socket.off('element:move');
-            socket.off('element:update');
-            socket.off('element:add');
-            socket.off('element:delete');
-            socket.off('element:reorder');
+            socket.off('element:move', handleSocketMove);
+            socket.off('element:update', handleSocketUpdate);
+            socket.off('element:add', handleSocketAdd);
+            socket.off('element:delete', handleSocketDelete);
+            socket.off('element:reorder', handleSocketReorder);
         };
-    }, [socket, selectedId, pageId]);
+    }, [socket, applyElementPatch]);
 
     // Sync transformer to selected elements
     useEffect(() => {
@@ -511,13 +552,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             });
         }
 
-        setElements((prev: Element[]) =>
-            prev.map((el: Element) => {
-                const update = elementsToUpdate.find(u => u.id === el.id);
-                return update ? { ...el, x: update.x, y: update.y } : el;
-            })
-        );
-
         elementsToUpdate.forEach(update => {
             if (socket) {
                 console.log('📤 Emitting element:move:', update);
@@ -589,16 +623,30 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             }
         });
 
-        if (arrowsToUpdate.length > 0) {
-            setElements(prev => prev.map(el => {
-                const update = arrowsToUpdate.find(u => u.id === el.id);
-                if (update) return { ...el, ...update };
-                return el;
-            }));
-            arrowsToUpdate.forEach(u => {
-                if (socket) socket.emit('element:update', { id: u.id, content: u });
+        const arrowUpdatesById = new Map(arrowsToUpdate.map(update => [update.id, update]));
+
+        setElements((prev) => {
+            let changed = false;
+            const next = prev.map((el) => {
+                const moveUpdate = elementsToUpdate.find(u => u.id === el.id);
+                const arrowUpdate = el.id ? arrowUpdatesById.get(el.id) : undefined;
+                if (!moveUpdate && !arrowUpdate) return el;
+
+                const patch = mergeDefinedFields<Element>(
+                    moveUpdate ? { x: moveUpdate.x, y: moveUpdate.y } : undefined,
+                    arrowUpdate as Partial<Element> | undefined
+                );
+
+                if (!hasElementPatchChanges(el, patch)) return el;
+                changed = true;
+                return { ...el, ...patch };
             });
-        }
+            return changed ? next : prev;
+        });
+
+        arrowsToUpdate.forEach(u => {
+            if (socket) socket.emit('element:update', { id: u.id, content: u });
+        });
 
     }, [snapToGrid, gridSize, socket]); // Dependencies
 
@@ -701,7 +749,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         const pos = stage.getPointerPosition();
         if (!pos) return;
         try {
-            const res = await fetch(`${API_BASE_URL}/api/batch/tasks`);
+            const res = await fetch(`${API_BASE_URL}/api/batch/tasks?projectId=${encodeURIComponent(currentProjectId || '')}`);
             const tasks = await res.json() as any[];
             const latestOpenTask = Array.isArray(tasks)
                 ? tasks.find((task) => ['pending', 'failed'].includes(task.status))
@@ -723,7 +771,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             y: pos.y,
             elementId: id
         });
-    }, []);
+    }, [currentProjectId]);
 
     const handleArrowPointDrag = useCallback((id: string, pointIndex: number, x: number, y: number) => {
         setElements(prev => prev.map(el => {
@@ -830,7 +878,25 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
 
         const fileList = Array.from(files);
         const concurrencyLimit = 3; // Limit simultaneous uploads/processing
-        const results: ({ type: string; width: number; height: number; url: string } | null)[] = [];
+        type UploadedCanvasMedia = {
+            type: string;
+            width: number;
+            height: number;
+            url: string;
+            sourceVideoUrl?: string;
+            sourceKind?: 'imported';
+            title?: string;
+        };
+
+        const results: (UploadedCanvasMedia | null)[] = [];
+        const scheduleUploadCleanup = (uploadId: string, delayMs: number) => {
+            const timer = window.setTimeout(() => {
+                if (!isMountedRef.current) return;
+                setUploadsInProgress(prev => prev.filter(u => u.id !== uploadId));
+                uploadCleanupTimersRef.current = uploadCleanupTimersRef.current.filter(id => id !== timer);
+            }, delayMs);
+            uploadCleanupTimersRef.current.push(timer);
+        };
 
         // Helper function to process a single file
         const processFile = async (file: File) => {
@@ -842,23 +908,37 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 status: 'uploading'
             };
 
-            setUploadsInProgress(prev => [...prev, newUpload]);
+            if (isMountedRef.current) {
+                setUploadsInProgress(prev => [...prev, newUpload]);
+            }
 
             try {
                 // Use XMLHttpRequest for progress tracking
-                const { url, type } = await new Promise<{ url: string, type: string }>((resolve, reject) => {
+                const uploadResult = await new Promise<{
+                    url: string;
+                    type: string;
+                    sourceVideoUrl?: string;
+                    sourceKind?: 'imported';
+                    sourceId?: string;
+                    title?: string;
+                }>((resolve, reject) => {
                     const xhr = new XMLHttpRequest();
                     const formData = new FormData();
 
                     formData.append('projectId', currentProjectId || 'default-project');
                     formData.append('file', file);
+                    if (file.type.startsWith('video/')) {
+                        formData.append('importToProjectVideos', 'true');
+                    }
 
                     xhr.upload.onprogress = (e) => {
                         if (e.lengthComputable) {
                             const progress = Math.round((e.loaded / e.total) * 100);
-                            setUploadsInProgress(prev =>
-                                prev.map(u => u.id === uploadId ? { ...u, progress } : u)
-                            );
+                            if (isMountedRef.current) {
+                                setUploadsInProgress(prev =>
+                                    prev.map(u => u.id === uploadId ? { ...u, progress } : u)
+                                );
+                            }
                         }
                     };
 
@@ -876,11 +956,16 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                     xhr.send(formData);
                 });
 
-                setUploadsInProgress(prev =>
-                    prev.map(u => u.id === uploadId ? { ...u, status: 'processing', progress: 100 } : u)
-                );
+                if (isMountedRef.current) {
+                    setUploadsInProgress(prev =>
+                        prev.map(u => u.id === uploadId ? { ...u, status: 'processing', progress: 100 } : u)
+                    );
+                }
 
-                const elementType = type.startsWith('video') ? 'video' : 'image';
+                const { url, type, sourceVideoUrl, sourceKind, title } = uploadResult;
+                const elementType = sourceVideoUrl
+                    ? 'video-card'
+                    : (type.startsWith('video') ? 'video' : 'image');
                 let finalWidth: number | undefined;
                 let finalHeight: number | undefined;
 
@@ -909,7 +994,10 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                     video.preload = 'metadata'; // Explicitly hint to load metadata
                     video.src = fullUrl;
                     await new Promise((resolve, reject) => {
+                        const timeoutId = window.setTimeout(() => reject(new Error('Timeout loading video metadata')), 10000);
+                        const clearVideoTimeout = () => window.clearTimeout(timeoutId);
                         video.onloadedmetadata = () => {
+                            clearVideoTimeout();
                             const ratio = video.videoWidth / video.videoHeight;
                             const maxWidth = 533;
                             if (ratio > 1) {
@@ -921,33 +1009,45 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                             }
                             resolve(null);
                         };
-                        video.onerror = () => reject(new Error('Failed to load video metadata'));
-                        // Add a timeout fallback for video metadata loading
-                        setTimeout(() => reject(new Error('Timeout loading video metadata')), 10000);
+                        video.onerror = () => {
+                            clearVideoTimeout();
+                            reject(new Error('Failed to load video metadata'));
+                        };
                     });
+                } else if (elementType === 'video-card') {
+                    finalWidth = 240;
+                    finalHeight = 184;
                 }
 
                 if (!finalWidth || !finalHeight) {
                     throw new Error('Could not determine asset dimensions');
                 }
 
-                setUploadsInProgress(prev =>
-                    prev.map(u => u.id === uploadId ? { ...u, status: 'completed' } : u)
-                );
+                if (isMountedRef.current) {
+                    setUploadsInProgress(prev =>
+                        prev.map(u => u.id === uploadId ? { ...u, status: 'completed' } : u)
+                    );
+                }
 
-                setTimeout(() => {
-                    setUploadsInProgress(prev => prev.filter(u => u.id !== uploadId));
-                }, 2000);
+                scheduleUploadCleanup(uploadId, 2000);
 
-                return { type: elementType, width: finalWidth, height: finalHeight, url };
+                return {
+                    type: elementType,
+                    width: finalWidth,
+                    height: finalHeight,
+                    url,
+                    sourceVideoUrl,
+                    sourceKind,
+                    title: title || file.name.replace(/\.[^.]+$/, '')
+                };
             } catch (error) {
                 console.error('Upload failed:', error);
-                setUploadsInProgress(prev =>
-                    prev.map(u => u.id === uploadId ? { ...u, status: 'error', error: 'Upload failed' } : u)
-                );
-                setTimeout(() => {
-                    setUploadsInProgress(prev => prev.filter(u => u.id !== uploadId));
-                }, 5000);
+                if (isMountedRef.current) {
+                    setUploadsInProgress(prev =>
+                        prev.map(u => u.id === uploadId ? { ...u, status: 'error', error: 'Upload failed' } : u)
+                    );
+                }
+                scheduleUploadCleanup(uploadId, 5000);
                 return null;
             }
         };
@@ -959,7 +1059,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             results.push(...batchResults);
         }
 
-        const validResults = results.filter(Boolean);
+        const validResults = results.filter((result): result is UploadedCanvasMedia => !!result);
 
         const baseX = 100;
         const baseY = 100;
@@ -982,7 +1082,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         // Actually, let's just execute the placement logic.
 
         for (const data of validResults) {
-            if (!data) continue;
             const newElement = {
                 pageId,
                 type: data.type,
@@ -990,7 +1089,14 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 y: currentY,
                 width: data.width,
                 height: data.height,
-                content: { url: data.url }
+                content: data.type === 'video-card'
+                    ? {
+                        url: data.url,
+                        text: data.title,
+                        sourceVideoUrl: data.sourceVideoUrl,
+                        sourceKind: data.sourceKind
+                    }
+                    : { url: data.url }
             };
 
             try {
@@ -1183,19 +1289,19 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     const visibleElements = useMemo(() => {
         return elements.filter(el => {
             if (ratingFilter === 0) return true;
-            if (el.type !== 'image' && el.type !== 'video') return true;
+            if (el.type !== 'image' && el.type !== 'video' && el.type !== 'video-card') return true;
             return (el.rating || 0) >= ratingFilter;
         });
     }, [elements, ratingFilter]);
 
-    const handleUpdateStyle = (id: string, style: Partial<Element>) => {
+    const handleUpdateStyle = useCallback((id: string, style: Partial<Element>) => {
         saveToHistory();
-        setElements(prev => prev.map(el => (el.id === id ? { ...el, ...style } : el)));
+        applyElementPatch(id, style);
         if (socket) socket.emit('element:update', { id, ...style });
-    };
+    }, [applyElementPatch, saveToHistory, socket]);
 
     const handleDownload = async () => {
-        const mediaElements = elements.filter(el => selectedIds.includes(el.id) && (el.type === 'image' || el.type === 'video'));
+        const mediaElements = elements.filter(el => selectedIds.includes(el.id) && (el.type === 'image' || el.type === 'video' || el.type === 'video-card'));
         if (mediaElements.length === 0) return;
 
         try {
@@ -1221,6 +1327,10 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             alert('Failed to download assets');
         }
     };
+
+    const handlePlayVideoCard = useCallback((url: string, title?: string) => {
+        setVideoModal({ url, title });
+    }, []);
 
     const handleCreateGrid = async () => {
         if (selectedIds.length < 2) return;
@@ -1337,7 +1447,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         fetch(`${API_BASE_URL}/api/batch/add-frame`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: el.url, role })
+            body: JSON.stringify({ url: el.url, role, projectId: currentProjectId })
         })
             .then(async (res) => {
                 const data = await res.json();
@@ -1355,17 +1465,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 console.error('Failed to add frame to batch:', err);
             });
     };
-
-    const handleSyncVideos = useCallback(() => {
-        fetch(`${API_BASE_URL}/api/videos/sync`, { method: 'POST' })
-            .then(res => res.json())
-            .then(data => {
-                if (data.added > 0) {
-                    console.log(`✅ Synced ${data.added} new videos to canvas`);
-                }
-            })
-            .catch(err => console.error('Failed to sync videos:', err));
-    }, []);
 
     return (
         <div
@@ -1389,7 +1488,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 onDelete={handleDeleteElements}
                 onDownload={handleDownload}
                 onCreateGrid={handleCreateGrid}
-                onSyncVideos={handleSyncVideos}
                 onMoveSelectionToPage={handleMoveSelectionToPage}
                 onResetSize={handleResetSize}
                 onSaveView={handleSaveView}
@@ -1535,6 +1633,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                             onDblClick={handleDblClick}
                             onArrowPointDrag={handleArrowPointDrag}
                             onArrowPointDragEnd={handleArrowPointDragEnd}
+                            onPlayRequest={handlePlayVideoCard}
                             onUpdateElement={handleUpdateStyle}
                             onContextMenu={handleContextMenu}
                         />
@@ -1564,6 +1663,59 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                     />
                 </Layer>
             </Stage >
+
+            {videoModal && (
+                <div
+                    onClick={() => setVideoModal(null)}
+                    style={{
+                        position: 'absolute',
+                        inset: 0,
+                        zIndex: 2500,
+                        background: 'rgba(2, 6, 23, 0.82)',
+                        backdropFilter: 'blur(10px)',
+                        display: 'grid',
+                        placeItems: 'center',
+                        padding: '24px'
+                    }}
+                >
+                    <div
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                            width: 'min(960px, 100%)',
+                            borderRadius: '24px',
+                            background: '#020617',
+                            border: '1px solid rgba(148, 163, 184, 0.2)',
+                            boxShadow: '0 30px 80px rgba(0,0,0,0.45)',
+                            overflow: 'hidden'
+                        }}
+                    >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 18px', borderBottom: '1px solid rgba(148, 163, 184, 0.14)' }}>
+                            <div style={{ minWidth: 0 }}>
+                                <div style={{ fontSize: '11px', color: '#7dd3fc', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '6px' }}>Playback</div>
+                                <div style={{ fontSize: '14px', color: '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{videoModal.title || 'Video'}</div>
+                            </div>
+                            <button
+                                onClick={() => setVideoModal(null)}
+                                style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', display: 'grid', placeItems: 'center', fontSize: '18px' }}
+                            >
+                                x
+                            </button>
+                        </div>
+                        <div style={{ background: '#000' }}>
+                            <video
+                                key={videoModal.url}
+                                controls
+                                autoPlay
+                                playsInline
+                                preload="metadata"
+                                style={{ width: '100%', display: 'block', maxHeight: '80vh' }}
+                            >
+                                <source src={videoModal.url.startsWith('http') ? videoModal.url : `${API_BASE_URL}${videoModal.url}`} type="video/mp4" />
+                            </video>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div >
     );
 };
@@ -1571,3 +1723,4 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
 
 
 export default Canvas;
+

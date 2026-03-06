@@ -36,6 +36,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS batch_tasks (
     id TEXT PRIMARY KEY,
+    project_id TEXT,
     first_frame_url TEXT,
     last_frame_url TEXT,
     middle_frame_urls TEXT DEFAULT '[]',
@@ -52,7 +53,21 @@ db.exec(`
     mode TEXT DEFAULT 'std',
     cfg_scale REAL DEFAULT 0.5,
     negative_prompt TEXT,
-    error TEXT
+    error TEXT,
+    gallery_hidden INTEGER DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS project_videos (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    video_url TEXT NOT NULL,
+    thumbnail_url TEXT,
+    source_path TEXT NOT NULL,
+    gallery_hidden INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
   );
 
   CREATE TABLE IF NOT EXISTS chat_messages (
@@ -63,6 +78,28 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
+
+try {
+  db.exec('ALTER TABLE batch_tasks ADD COLUMN project_id TEXT');
+} catch (e) {
+  // Column already exists
+}
+
+try {
+  db.exec('ALTER TABLE project_videos ADD COLUMN thumbnail_url TEXT');
+} catch (e) {
+  // Column already exists
+}
+try {
+  db.exec('ALTER TABLE batch_tasks ADD COLUMN gallery_hidden INTEGER DEFAULT 0');
+} catch (e) {
+  // Column already exists
+}
+try {
+  db.exec('ALTER TABLE project_videos ADD COLUMN gallery_hidden INTEGER DEFAULT 0');
+} catch (e) {
+  // Column already exists
+}
 
 try {
   db.exec('ALTER TABLE batch_tasks ADD COLUMN aspect_ratio TEXT DEFAULT "16:9"');
@@ -226,6 +263,9 @@ if (projectCount.count === 0 && storyboardCount.count === 0) {
       updateStoryboard.run('default-project', sb.id);
     }
   }
+
+  db.prepare('UPDATE batch_tasks SET project_id = ? WHERE project_id IS NULL').run('default-project');
+
   // Migration: Ensure all pages have a chapter_id
   const pagesWithoutChapter = db.prepare('SELECT id FROM pages WHERE chapter_id IS NULL').all();
   if (pagesWithoutChapter.length > 0) {
