@@ -191,8 +191,9 @@ const VideosPage: React.FC<VideosPageProps> = ({ socket, currentProjectId, chapt
             return;
         }
 
-        openPlaybackQueue([video]);
-    }, [closePlaybackModal, openPlaybackQueue, selectedVideoIds.length]);
+        const startIndex = videos.findIndex((item) => item.id === video.id);
+        openPlaybackQueue(videos, startIndex >= 0 ? startIndex : 0);
+    }, [closePlaybackModal, openPlaybackQueue, selectedVideoIds.length, videos]);
 
     const handleSendSelectedToPage = React.useCallback(async (pageId: string) => {
         if (!currentProjectId || sending || selectedVideos.length === 0) return;
@@ -577,10 +578,64 @@ const VideosPage: React.FC<VideosPageProps> = ({ socket, currentProjectId, chapt
                         placeItems: 'center',
                         padding: '24px'
                     }}
-                >
-                    <div
-                        onClick={(e) => e.stopPropagation()}
-                        style={{
+                    >
+                        {playbackQueue.length > 1 && (
+                            <>
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setPlaybackIndex((prev) => Math.max(prev - 1, 0));
+                                    }}
+                                    disabled={playbackIndex === 0}
+                                    style={{
+                                        position: 'absolute',
+                                        left: '24px',
+                                        top: '50%',
+                                        transform: 'translateY(-50%)',
+                                        width: '56px',
+                                        height: '56px',
+                                        borderRadius: '999px',
+                                        border: '1px solid rgba(148, 163, 184, 0.24)',
+                                        background: 'rgba(15, 23, 42, 0.72)',
+                                        color: playbackIndex === 0 ? '#475569' : '#e2e8f0',
+                                        fontSize: '28px',
+                                        cursor: playbackIndex === 0 ? 'not-allowed' : 'pointer',
+                                        zIndex: 1
+                                    }}
+                                    title="Previous video"
+                                >
+                                    ‹
+                                </button>
+                                <button
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        setPlaybackIndex((prev) => Math.min(prev + 1, playbackQueue.length - 1));
+                                    }}
+                                    disabled={playbackIndex >= playbackQueue.length - 1}
+                                    style={{
+                                        position: 'absolute',
+                                        right: '24px',
+                                        top: '50%',
+                                        transform: 'translateY(-50%)',
+                                        width: '56px',
+                                        height: '56px',
+                                        borderRadius: '999px',
+                                        border: '1px solid rgba(148, 163, 184, 0.24)',
+                                        background: 'rgba(15, 23, 42, 0.72)',
+                                        color: playbackIndex >= playbackQueue.length - 1 ? '#475569' : '#e2e8f0',
+                                        fontSize: '28px',
+                                        cursor: playbackIndex >= playbackQueue.length - 1 ? 'not-allowed' : 'pointer',
+                                        zIndex: 1
+                                    }}
+                                    title="Next video"
+                                >
+                                    ›
+                                </button>
+                            </>
+                        )}
+                        <div
+                            onClick={(e) => e.stopPropagation()}
+                            style={{
                             width: 'min(960px, 100%)',
                             borderRadius: '24px',
                             background: '#020617',

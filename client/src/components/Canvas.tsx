@@ -80,6 +80,11 @@ const isElementInViewport = (
     element.y + element.height < viewport.top
 );
 
+const scaleForViewport = (baseSize: number, scale: number, minSize: number, maxSize: number) => {
+    const safeScale = scale > 0 ? scale : 1;
+    return Math.round(Math.max(minSize, Math.min(maxSize, baseSize / safeScale)));
+};
+
 const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidth, chapters, allPages, onSelectPage, onOpenBatchManagement, socket, currentProjectId }) => {
 
 
@@ -849,16 +854,28 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         }
     }, [socket]);
 
+    const getViewportSpawnPoint = useCallback(() => {
+        const stageWidth = window.innerWidth - (isSidebarCollapsed ? 60 : sidebarWidth);
+        const stageHeight = window.innerHeight;
+        return {
+            x: (-stagePos.x + stageWidth * 0.18) / stageScale,
+            y: (-stagePos.y + stageHeight * 0.18) / stageScale
+        };
+    }, [isSidebarCollapsed, sidebarWidth, stagePos.x, stagePos.y, stageScale]);
+
     const handleAddZone = () => {
         if (!pageId) return;
         saveToHistory();
+        const spawn = getViewportSpawnPoint();
+        const width = scaleForViewport(200, stageScale, 80, 1200);
+        const height = scaleForViewport(150, stageScale, 60, 900);
         const newZone = {
             pageId,
             type: 'rect',
-            x: 50,
-            y: 50,
-            width: 200,
-            height: 150,
+            x: spawn.x,
+            y: spawn.y,
+            width,
+            height,
             content: { fill: 'transparent', stroke: 'white', strokeWidth: 1 }
         };
         fetch(`${API_BASE_URL}/api/elements`, {
@@ -876,12 +893,13 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     const handleAddText = () => {
         if (!pageId) return;
         saveToHistory();
+        const spawn = getViewportSpawnPoint();
         const newText = {
             pageId,
             type: 'text',
-            x: 100,
-            y: 100,
-            fontSize: 48,
+            x: spawn.x,
+            y: spawn.y,
+            fontSize: scaleForViewport(48, stageScale, 18, 240),
             content: { text: 'Double click to edit' }
         };
         fetch(`${API_BASE_URL}/api/elements`, {
@@ -905,15 +923,17 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     const handleAddArrow = () => {
         if (!pageId) return;
         saveToHistory();
+        const spawn = getViewportSpawnPoint();
+        const arrowLength = scaleForViewport(100, stageScale, 40, 800);
+        const strokeWidth = scaleForViewport(5, stageScale, 2, 24);
         const newArrow = {
             pageId,
             type: 'arrow',
-            x: 100,
-            y: 100,
+            x: spawn.x,
+            y: spawn.y,
             width: 0,
             height: 0,
-            // Default horizontal arrow: 100px length
-            content: { points: [0, 0, 100, 0], fill: 'black', stroke: 'black', strokeWidth: 5 }
+            content: { points: [0, 0, arrowLength, 0], fill: 'black', stroke: 'black', strokeWidth }
         };
         fetch(`${API_BASE_URL}/api/elements`, {
             method: 'POST',
@@ -1501,8 +1521,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         if (!pageId) return;
 
         saveViewport(pageId, centeredViewport.x, centeredViewport.y, 1);
-        fetch(`${API_BASE_URL}/api/pages/${pageId}/viewport`, {
-            method: 'PUT',
+        fetch(`${API_BASE_URL}/api/pages/${pageId}`, {
+            method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 viewport_x: centeredViewport.x,

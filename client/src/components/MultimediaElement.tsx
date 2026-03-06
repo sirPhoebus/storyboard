@@ -155,7 +155,8 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
     const handleRatingClick = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>, value: number) => {
         e.cancelBubble = true;
         if (onUpdateElement) {
-            onUpdateElement(id, { rating: rating === value ? 0 : value });
+            const nextRating = rating === value ? 0 : value;
+            onUpdateElement(id, { rating: nextRating });
         }
     };
 
@@ -184,7 +185,13 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
                     opacity={i <= rating ? 1 : 0.3}
                     shadowBlur={i <= rating ? 10 : 0}
                     shadowColor="#FFD700"
+                    onMouseDown={(e) => {
+                        e.cancelBubble = true;
+                    }}
                     onClick={(e) => handleRatingClick(e, i)}
+                    onTouchStart={(e) => {
+                        e.cancelBubble = true;
+                    }}
                     onTap={(e) => handleRatingClick(e, i)}
                     onMouseEnter={(e) => {
                         const stage = e.target.getStage();
