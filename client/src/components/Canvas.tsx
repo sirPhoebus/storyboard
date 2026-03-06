@@ -85,6 +85,79 @@ const scaleForViewport = (baseSize: number, scale: number, minSize: number, maxS
     return Math.round(Math.max(minSize, Math.min(maxSize, baseSize / safeScale)));
 };
 
+const getGridGroupingKey = (element: Element) => {
+    const width = Math.max(1, element.width);
+    const height = Math.max(1, element.height);
+    const aspectRatio = width / height;
+    const roundedRatio = Math.round(aspectRatio * 4) / 4;
+    const areaBucket = Math.round((width * height) / 50000);
+    return `${roundedRatio}:${areaBucket}`;
+};
+
+const normalizeViewportValue = (value: unknown) => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+    return value;
+};
+
+const sanitizeViewport = (viewport: { x?: unknown; y?: unknown; scale?: unknown } | null) => {
+    if (!viewport) return null;
+
+    const x = normalizeViewportValue(viewport.x);
+    const y = normalizeViewportValue(viewport.y);
+    const scale = normalizeViewportValue(viewport.scale);
+
+    if (x === null || y === null || scale === null) return null;
+    if (scale < 0.1 || scale > 8) return null;
+    if (Math.abs(x) > 50000 || Math.abs(y) > 50000) return null;
+
+    return { x, y, scale };
+};
+
+const mediaDimensionCacheKey = (url: string) => `media-dim:${url}`;
+
+const readMediaDimensions = (url: string) => readCachedData<{ width: number; height: number }>(mediaDimensionCacheKey(url));
+
+const storeMediaDimensions = (url: string, width: number, height: number) => {
+    setCachedData(mediaDimensionCacheKey(url), { width, height }, 7 * 24 * 60 * 60 * 1000);
+};
+
+const getMediaSourceUrl = (element: Element) =>
+    element.type === 'video-card' && element.sourceVideoUrl ? element.sourceVideoUrl : element.url;
+
+const resolveNativeMediaDimensions = async (element: Element) => {
+    const sourceUrl = getMediaSourceUrl(element);
+    if (!sourceUrl) return null;
+
+    const cached = readMediaDimensions(sourceUrl);
+    if (cached?.width && cached?.height) {
+        return cached;
+    }
+
+    const fullUrl = sourceUrl.startsWith('http') ? sourceUrl : `${API_BASE_URL}${sourceUrl}`;
+
+    const dimensions = await new Promise<{ width: number; height: number } | null>((resolve) => {
+        if (element.type === 'image') {
+            const img = new window.Image();
+            img.onload = () => resolve({ width: img.naturalWidth || img.width, height: img.naturalHeight || img.height });
+            img.onerror = () => resolve(null);
+            img.src = fullUrl;
+            return;
+        }
+
+        const video = document.createElement('video');
+        video.preload = 'metadata';
+        video.onloadedmetadata = () => resolve({ width: video.videoWidth, height: video.videoHeight });
+        video.onerror = () => resolve(null);
+        video.src = fullUrl;
+    });
+
+    if (dimensions?.width && dimensions?.height) {
+        storeMediaDimensions(sourceUrl, dimensions.width, dimensions.height);
+    }
+
+    return dimensions;
+};
+
 const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidth, chapters, allPages, onSelectPage, onOpenBatchManagement, socket, currentProjectId }) => {
 
 
@@ -163,7 +236,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         const saved = localStorage.getItem(`viewport_${id}`);
         if (saved) {
             try {
-                return JSON.parse(saved);
+                return sanitizeViewport(JSON.parse(saved));
             } catch (e) {
                 console.warn('Failed to parse viewport state', e);
             }
@@ -172,11 +245,11 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         // 2. Try Server Data
         const page = allPages.find(p => p.id === id);
         if (page && page.viewport_scale) {
-            return {
+            return sanitizeViewport({
                 x: page.viewport_x || 0,
                 y: page.viewport_y || 0,
                 scale: page.viewport_scale
-            };
+            });
         }
 
         return null;
@@ -1475,22 +1548,45 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         setVideoModal({ url, title });
     }, []);
 
-    const handleResetViewport = useCallback(() => {
+    const handleResetViewport = useCallback(async () => {
         const centeredViewport = getCenteredViewport();
-        const mediaPatches = elementsRef.current
-            .filter((element) => isMediaElementType(element.type))
-            .map((element) => {
-                const originalWidth = element.originalWidth;
-                const originalHeight = element.originalHeight;
-                if (!originalWidth || !originalHeight) return null;
-                if (element.width === originalWidth && element.height === originalHeight) return null;
+        const mediaElements = elementsRef.current.filter((element) => isMediaElementType(element.type));
+        const resolvedMedia: Array<{ id: string; width: number; height: number } | null> = [];
+
+        for (let i = 0; i < mediaElements.length; i += 4) {
+            const batch = mediaElements.slice(i, i + 4);
+            const batchResolved = await Promise.all(batch.map(async (element) => {
+                const sourceUrl = getMediaSourceUrl(element);
+                if (!sourceUrl) return null;
+
+                const cachedDimensions = readMediaDimensions(sourceUrl);
+                const dimensions = cachedDimensions || await resolveNativeMediaDimensions(element) || (
+                    element.originalWidth && element.originalHeight
+                        ? { width: element.originalWidth, height: element.originalHeight }
+                        : null
+                );
+
+                if (!dimensions?.width || !dimensions?.height) return null;
+                if (
+                    element.width === dimensions.width &&
+                    element.height === dimensions.height &&
+                    element.originalWidth === dimensions.width &&
+                    element.originalHeight === dimensions.height
+                ) {
+                    return null;
+                }
+
                 return {
                     id: element.id,
-                    width: originalWidth,
-                    height: originalHeight
+                    width: dimensions.width,
+                    height: dimensions.height
                 };
-            })
-            .filter((item): item is { id: string; width: number; height: number } => !!item);
+            }));
+
+            resolvedMedia.push(...batchResolved);
+        }
+
+        const mediaPatches = resolvedMedia.filter((item): item is { id: string; width: number; height: number } => !!item);
 
         setStageScale(1);
         setStagePos(centeredViewport);
@@ -1500,7 +1596,13 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             setElements((prev) => prev.map((element) => {
                 const patch = mediaPatches.find((item) => item.id === element.id);
                 if (!patch) return element;
-                return { ...element, width: patch.width, height: patch.height };
+                return {
+                    ...element,
+                    width: patch.width,
+                    height: patch.height,
+                    originalWidth: patch.width,
+                    originalHeight: patch.height
+                };
             }));
 
             mediaPatches.forEach((patch) => {
@@ -1511,7 +1613,9 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                         height: patch.height,
                         content: {
                             width: patch.width,
-                            height: patch.height
+                            height: patch.height,
+                            originalWidth: patch.width,
+                            originalHeight: patch.height
                         }
                     });
                 }
@@ -1539,36 +1643,58 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
 
         const selectedElements = elements
             .filter(el => selectedIds.includes(el.id))
-            .sort((a, b) => (a.y - b.y) || (a.x - b.x));
+            .sort((a, b) => {
+                const groupA = getGridGroupingKey(a);
+                const groupB = getGridGroupingKey(b);
+                if (groupA !== groupB) return groupA.localeCompare(groupB);
 
-        if (selectedElements.length > rows * columns) {
-            alert(`Grid ${columns}x${rows} is too small for ${selectedElements.length} items.`);
-            return;
-        }
+                const areaA = a.width * a.height;
+                const areaB = b.width * b.height;
+                if (areaA !== areaB) return areaB - areaA;
 
-        const spacing = 20;
+                if (a.height !== b.height) return b.height - a.height;
+                if (a.width !== b.width) return b.width - a.width;
+
+                return (a.y - b.y) || (a.x - b.x);
+            });
+
+        const spacing = 5;
 
         // Use the position of the first (top-leftmost) element as the anchor
         const baseX = selectedElements[0].x;
         const baseY = selectedElements[0].y;
 
-        let currentX = baseX;
-        let currentY = baseY;
-        let maxRowHeight = 0;
+        const gridCellCount = rows * columns;
+        const columnWidths = Array.from({ length: columns }, () => 0);
+        const rowHeights = Array.from({ length: rows }, () => 0);
+
+        selectedElements.forEach((el, index) => {
+            const indexInBlock = index % gridCellCount;
+            const columnIndex = indexInBlock % columns;
+            const rowIndex = Math.floor(indexInBlock / columns);
+            columnWidths[columnIndex] = Math.max(columnWidths[columnIndex], el.width);
+            rowHeights[rowIndex] = Math.max(rowHeights[rowIndex], el.height);
+        });
+
+        const columnOffsets = columnWidths.map((_, index) =>
+            columnWidths.slice(0, index).reduce((sum, width) => sum + width, 0) + index * spacing
+        );
+        const rowOffsets = rowHeights.map((_, index) =>
+            rowHeights.slice(0, index).reduce((sum, height) => sum + height, 0) + index * spacing
+        );
+        const gridBlockWidth = columnWidths.reduce((sum, width) => sum + width, 0) + Math.max(0, columns - 1) * spacing;
         const updates: { id: string, x: number, y: number }[] = [];
 
         selectedElements.forEach((el, index) => {
-            updates.push({ id: el.id, x: currentX, y: currentY });
+            const blockIndex = Math.floor(index / gridCellCount);
+            const indexInBlock = index % gridCellCount;
+            const columnIndex = indexInBlock % columns;
+            const rowIndex = Math.floor(indexInBlock / columns);
+            const blockOffsetX = blockIndex * (gridBlockWidth + spacing);
+            const x = baseX + blockOffsetX + columnOffsets[columnIndex];
+            const y = baseY + rowOffsets[rowIndex];
 
-            maxRowHeight = Math.max(maxRowHeight, el.height);
-
-            if ((index + 1) % columns === 0) {
-                currentX = baseX;
-                currentY += maxRowHeight + spacing;
-                maxRowHeight = 0;
-            } else {
-                currentX += el.width + spacing;
-            }
+            updates.push({ id: el.id, x, y });
         });
 
         // Optimistically update local state
@@ -1589,25 +1715,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     };
 
 
-
-
-    const handleSaveView = () => {
-        if (!pageId) return;
-
-        // Optimistically save locally too
-        saveViewport(pageId, stagePos.x, stagePos.y, stageScale);
-
-        fetch(`${API_BASE_URL}/api/pages/${pageId}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                viewport_x: stagePos.x,
-                viewport_y: stagePos.y,
-                viewport_scale: stageScale
-            })
-        })
-            .catch(err => console.error('Failed to save viewport', err));
-    };
 
 
     const handleSendToBatch = (elementId: string, role: 'first' | 'last' | 'middle') => {
@@ -1663,7 +1770,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 onDownload={handleDownload}
                 onCreateGrid={handleCreateGrid}
                 onMoveSelectionToPage={handleMoveSelectionToPage}
-                onSaveView={handleSaveView}
                 onResetViewport={handleResetViewport}
                 onRatingFilterChange={setRatingFilter}
                 ratingFilter={ratingFilter}

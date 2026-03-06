@@ -12,6 +12,8 @@ interface MultimediaElementProps {
     width: number;
     height: number;
     url: string;
+    originalWidth?: number;
+    originalHeight?: number;
     draggable?: boolean;
     onDragStart?: (e: Konva.KonvaEventObject<DragEvent>) => void;
     onDragMove?: (e: Konva.KonvaEventObject<DragEvent>) => void;
@@ -41,6 +43,8 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
     width,
     height,
     draggable,
+    originalWidth,
+    originalHeight,
     onDragStart,
     onDragMove,
     onDragEnd,
@@ -68,6 +72,7 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
     const [isHovered, setIsHovered] = useState(false);
     const [isVideoPlaying, setIsVideoPlaying] = useState(isPlaying); // Track video playing state
     const [hasVideoError, setHasVideoError] = useState(false);
+    const [isAltHovering, setIsAltHovering] = useState(false);
 
     // Control video playback based on hover state
     useEffect(() => {
@@ -210,6 +215,9 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
     const hasBrokenMedia = (type === 'image' || type === 'video-card')
         ? imageStatus === 'failed'
         : type === 'video' && hasVideoError;
+    const nativeWidth = originalWidth || image?.naturalWidth || image?.width || 0;
+    const nativeHeight = originalHeight || image?.naturalHeight || image?.height || 0;
+    const showNativeSizeOverlay = type === 'image' && isHovered && isAltHovering && nativeWidth > 0 && nativeHeight > 0;
 
     return (
         <Group
@@ -232,8 +240,19 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
             onClick={onClick}
             onDblClick={onDblClick}
             onContextMenu={onContextMenu}
-            onMouseEnter={() => setIsHovered(true)}
-            onMouseLeave={() => setIsHovered(false)}
+            onMouseEnter={(e) => {
+                setIsHovered(true);
+                setIsAltHovering(!!e.evt.altKey);
+            }}
+            onMouseMove={(e) => {
+                if (type === 'image') {
+                    setIsAltHovering(!!e.evt.altKey);
+                }
+            }}
+            onMouseLeave={() => {
+                setIsHovered(false);
+                setIsAltHovering(false);
+            }}
         >
             {hasBrokenMedia ? (
                 <>
@@ -354,6 +373,28 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
                         listening={false}
                     />
                     {renderStars()}
+                </Group>
+            )}
+            {showNativeSizeOverlay && (
+                <Group listening={false}>
+                    <Rect
+                        x={12}
+                        y={12}
+                        width={150}
+                        height={34}
+                        fill="rgba(15, 23, 42, 0.86)"
+                        stroke="rgba(125, 211, 252, 0.4)"
+                        strokeWidth={1}
+                        cornerRadius={8}
+                    />
+                    <Text
+                        text={`${nativeWidth} x ${nativeHeight}`}
+                        x={20}
+                        y={21}
+                        fontSize={13}
+                        fontStyle="bold"
+                        fill="#e0f2fe"
+                    />
                 </Group>
             )}
         </Group>

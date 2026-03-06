@@ -20,7 +20,6 @@ interface CanvasToolbarProps {
     onDownload: () => void;
     onCreateGrid: (rows: number, columns: number) => void;
     onMoveSelectionToPage: (targetPageId: string) => void;
-    onSaveView: () => void;
     onResetViewport: () => void;
     ratingFilter: number;
     onRatingFilterChange: (rating: number) => void;
@@ -44,50 +43,39 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
     onDownload,
     onCreateGrid,
     onMoveSelectionToPage,
-    onSaveView,
     onResetViewport,
     ratingFilter,
     onRatingFilterChange
 }) => {
     const [isGridPickerOpen, setIsGridPickerOpen] = React.useState(false);
     const [gridPreview, setGridPreview] = React.useState({ rows: 2, columns: 2 });
-    const mainButtonStyle: CSSProperties = {
-        padding: '8px 12px',
-        background: '#34495e',
-        color: 'white',
-        border: 'none',
+    const toolbarButtonStyle: CSSProperties = {
+        padding: '6px 10px',
+        background: 'rgba(0, 0, 0, 0.4)',
+        color: '#ddd',
+        border: '1px solid rgba(255, 255, 255, 0.2)',
         borderRadius: '4px',
         cursor: 'pointer',
-        fontSize: '14px',
+        fontSize: '13px',
         fontWeight: 500,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
-    };
-
-    const subButtonStyle: CSSProperties = {
-        ...mainButtonStyle,
-        padding: '6px 10px',
-        background: 'rgba(0, 0, 0, 0.4)',
-        border: '1px solid rgba(255, 255, 255, 0.2)',
-        fontSize: '13px',
-        color: '#ddd',
         boxShadow: 'none'
     };
 
     const activeSubButtonStyle: CSSProperties = {
-        ...subButtonStyle,
+        ...toolbarButtonStyle,
         background: 'rgba(52, 152, 219, 0.4)',
         borderColor: '#3498db',
         color: 'white'
     };
 
     const disabledButtonStyle: CSSProperties = {
-        ...mainButtonStyle,
+        ...toolbarButtonStyle,
         opacity: 0.4,
         cursor: 'not-allowed',
-        background: '#2c3e50'
+        background: 'rgba(0, 0, 0, 0.2)'
     };
 
     const separatorStyle: CSSProperties = {
@@ -120,7 +108,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
         <div style={{ position: 'absolute', top: '20px', right: '20px', zIndex: 100, display: 'flex', gap: '8px', alignItems: 'center' }}>
             <button
                 onClick={pageId ? onAddZone : undefined}
-                style={pageId ? mainButtonStyle : disabledButtonStyle}
+                style={pageId ? toolbarButtonStyle : disabledButtonStyle}
                 disabled={!pageId}
                 title={pageId ? 'Add Zone' : noPageMessage}
             >
@@ -128,7 +116,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
             </button>
             <button
                 onClick={pageId ? onAddText : undefined}
-                style={pageId ? mainButtonStyle : disabledButtonStyle}
+                style={pageId ? toolbarButtonStyle : disabledButtonStyle}
                 disabled={!pageId}
                 title={pageId ? 'Add Text' : noPageMessage}
             >
@@ -136,7 +124,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
             </button>
             <button
                 onClick={pageId ? onAddArrow : undefined}
-                style={pageId ? mainButtonStyle : disabledButtonStyle}
+                style={pageId ? toolbarButtonStyle : disabledButtonStyle}
                 disabled={!pageId}
                 title={pageId ? 'Add Arrow' : noPageMessage}
             >
@@ -144,7 +132,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
             </button>
             <button
                 onClick={pageId ? onAddMedia : undefined}
-                style={pageId ? mainButtonStyle : disabledButtonStyle}
+                style={pageId ? toolbarButtonStyle : disabledButtonStyle}
                 disabled={!pageId}
                 title={pageId ? 'Add Media' : noPageMessage}
             >
@@ -152,22 +140,13 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
             </button>
 
             {pageId && (
-                <>
-                    <button
-                        onClick={onResetViewport}
-                        style={{ ...subButtonStyle, marginLeft: '8px' }}
-                        title="Reset zoom and recenter the viewport"
-                    >
-                        Reset View
-                    </button>
-                    <button
-                        onClick={onSaveView}
-                        style={{ ...subButtonStyle, fontSize: '16px', padding: '6px 8px' }}
-                        title="Save current view as default for this page (Saved to Server)"
-                    >
-                        Save
-                    </button>
-                </>
+                <button
+                    onClick={onResetViewport}
+                    style={{ ...toolbarButtonStyle, marginLeft: '8px' }}
+                    title="Reset zoom and recenter the viewport"
+                >
+                    Reset View
+                </button>
             )}
 
             <div style={separatorStyle} />
@@ -202,13 +181,13 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
                 <>
                     <button
                         onClick={() => onUpdateStyle(selectedElement.id, { fontStyle: selectedElement.fontStyle === 'bold' ? 'normal' : 'bold' })}
-                        style={{ ...subButtonStyle, fontWeight: 'bold', background: selectedElement.fontStyle === 'bold' ? activeSubButtonStyle.background : subButtonStyle.background }}
+                        style={{ ...toolbarButtonStyle, fontWeight: 'bold', background: selectedElement.fontStyle === 'bold' ? activeSubButtonStyle.background : toolbarButtonStyle.background }}
                     >
                         B
                     </button>
                     <button
                         onClick={() => onUpdateStyle(selectedElement.id, { fontStyle: selectedElement.fontStyle === 'italic' ? 'normal' : 'italic' })}
-                        style={{ ...subButtonStyle, fontStyle: 'italic', background: selectedElement.fontStyle === 'italic' ? activeSubButtonStyle.background : subButtonStyle.background }}
+                        style={{ ...toolbarButtonStyle, fontStyle: 'italic', background: selectedElement.fontStyle === 'italic' ? activeSubButtonStyle.background : toolbarButtonStyle.background }}
                     >
                         I
                     </button>
@@ -217,12 +196,12 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
                         title="Text Color"
                         value={selectedElement.fill || '#ffffff'}
                         onChange={(e) => onUpdateStyle(selectedElement.id, { fill: e.target.value })}
-                        style={{ ...subButtonStyle, width: '32px', padding: 0 }}
+                        style={{ ...toolbarButtonStyle, width: '32px', padding: 0 }}
                     />
                     <select
                         value={selectedElement.fontSize || 16}
                         onChange={(e) => onUpdateStyle(selectedElement.id, { fontSize: parseInt(e.target.value, 10) })}
-                        style={subButtonStyle}
+                        style={toolbarButtonStyle}
                     >
                         {[12, 14, 16, 20, 24, 32, 48, 64].map((size) => (
                             <option key={size} value={size}>
@@ -239,7 +218,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
                     <select
                         value={selectedElement.strokeWidth || 5}
                         onChange={(e) => onUpdateStyle(selectedElement.id, { strokeWidth: parseInt(e.target.value, 10) })}
-                        style={subButtonStyle}
+                        style={toolbarButtonStyle}
                     >
                         {[1, 2, 3, 5, 8, 10, 15, 20].map((size) => (
                             <option key={size} value={size}>
@@ -252,10 +231,10 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
 
             {selectedIds.length > 0 && selectedId && (
                 <>
-                    <button onClick={() => onReorder('front')} style={subButtonStyle}>
+                    <button onClick={() => onReorder('front')} style={toolbarButtonStyle}>
                         To Front
                     </button>
-                    <button onClick={() => onReorder('back')} style={subButtonStyle}>
+                    <button onClick={() => onReorder('back')} style={toolbarButtonStyle}>
                         To Back
                     </button>
                 </>
@@ -265,7 +244,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
                 const el = elements.find((item) => item.id === id);
                 return el?.type === 'image' || el?.type === 'video' || el?.type === 'video-card';
             }) && (
-                <button onClick={onDownload} style={mainButtonStyle} title="Download selected media as ZIP">
+                <button onClick={onDownload} style={toolbarButtonStyle} title="Download selected media as ZIP">
                     Download ↓
                 </button>
             )}
@@ -273,7 +252,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
             {selectedIds.length > 0 && (
                 <button
                     onClick={() => onDelete(selectedIds)}
-                    style={{ ...mainButtonStyle, background: '#e74c3c' }}
+                    style={{ ...toolbarButtonStyle, background: '#e74c3c' }}
                     title="Delete selected elements"
                 >
                     Delete
@@ -284,7 +263,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
                 <div style={{ position: 'relative' }}>
                     <button
                         onClick={() => setIsGridPickerOpen((open) => !open)}
-                        style={mainButtonStyle}
+                        style={toolbarButtonStyle}
                         title="Choose the grid size for the selected elements"
                     >
                         {`Create Grid ${gridPreview.columns}x${gridPreview.rows}`}
@@ -350,7 +329,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
                 <div style={{ position: 'relative', marginLeft: '5px' }}>
                     <button
                         onClick={() => onToggleMoveMenu(!isMoveMenuOpen)}
-                        style={mainButtonStyle}
+                        style={toolbarButtonStyle}
                         title="Move selected elements to another page"
                     >
                         Move to Page ▾

@@ -168,6 +168,8 @@ const CanvasItem: React.FC<CanvasItemProps> = memo(({
                 width={el.width}
                 height={el.height}
                 url={el.url || ''}
+                originalWidth={el.originalWidth}
+                originalHeight={el.originalHeight}
                 title={el.text}
                 sourceVideoUrl={el.sourceVideoUrl}
                 onPlayRequest={onPlayRequest}
@@ -217,6 +219,8 @@ const CanvasItem: React.FC<CanvasItemProps> = memo(({
         pEl.fontSize === nEl.fontSize &&
         pEl.fontStyle === nEl.fontStyle &&
         pEl.url === nEl.url &&
+        pEl.originalWidth === nEl.originalWidth &&
+        pEl.originalHeight === nEl.originalHeight &&
         pEl.sourceVideoUrl === nEl.sourceVideoUrl &&
         pEl.isPlaying === nEl.isPlaying &&
         pEl.isMuted === nEl.isMuted &&
