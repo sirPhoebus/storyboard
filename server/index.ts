@@ -11,6 +11,7 @@ import archiver from 'archiver';
 import { KlingService, KlingImageToVideoService } from './services/klingService';
 import getVideoDimensions from 'get-video-dimensions';
 import jwt from 'jsonwebtoken';
+import { spawnSync } from 'child_process';
 
 const dataDir = process.env.DATA_DIR || process.cwd();
 const uploadsDir = path.join(dataDir, 'uploads');
@@ -747,6 +748,130 @@ const getFilePathFromUrl = (url: string) => {
     }
 };
 
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.webm', '.mkv', '.avi']);
+
+const isVideoFileName = (fileName: string) => VIDEO_EXTENSIONS.has(path.extname(fileName).toLowerCase());
+
+const getProjectVideoImportDir = (projectId: string) => path.join(uploadsDir, projectId, '_videos');
+const getProjectVideoThumbDir = (projectId: string) => path.join(uploadsDir, projectId, '_video_thumbs');
+
+const ensureDirectoryExists = (dir: string) => {
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+};
+
+const toUploadsUrl = (...segments: string[]) => `/uploads/${segments.map((segment) => segment.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')).join('/')}`;
+
+const createVideoThumbnail = (videoPath: string, thumbnailPath: string) => {
+    ensureDirectoryExists(path.dirname(thumbnailPath));
+    const ffmpeg = spawnSync('ffmpeg', [
+        '-y',
+        '-ss', '00:00:00.500',
+        '-i', videoPath,
+        '-frames:v', '1',
+        '-vf', 'scale=640:-1',
+        thumbnailPath
+    ], { stdio: 'ignore' });
+
+    if (ffmpeg.status !== 0 || !fs.existsSync(thumbnailPath)) {
+        return null;
+    }
+
+    return thumbnailPath;
+};
+
+const getProjectStoryboardId = (projectId: string) => {
+    const storyboard = db.prepare('SELECT id FROM storyboards WHERE project_id = ?').get(projectId) as { id: string } | undefined;
+    return storyboard?.id || null;
+};
+
+const getProjectVideosPageId = (projectId: string) => {
+    const storyboardId = getProjectStoryboardId(projectId);
+    if (!storyboardId) return null;
+    const page = db.prepare("SELECT id FROM pages WHERE storyboard_id = ? AND type = 'videos'").get(storyboardId) as { id: string } | undefined;
+    return page?.id || null;
+};
+
+type GalleryVideoRow = {
+    id: string;
+    project_id: string;
+    title: string;
+    video_url: string;
+    thumbnail_url?: string | null;
+    created_at: string;
+    source: 'batch' | 'imported';
+    source_id: string;
+    duration?: number;
+};
+
+const getProjectGalleryVideos = (projectId: string): GalleryVideoRow[] => {
+    const importedRows = db.prepare(`
+        SELECT id, project_id, title, video_url, thumbnail_url, source_path, created_at
+        FROM project_videos
+        WHERE project_id = ? AND COALESCE(gallery_hidden, 0) = 0
+        ORDER BY created_at DESC
+    `).all(projectId) as Array<{
+        id: string;
+        project_id: string;
+        title: string;
+        video_url: string;
+        thumbnail_url?: string | null;
+        source_path: string;
+        created_at: string;
+    }>;
+
+    const imported = importedRows
+        .filter((row) => row.source_path && fs.existsSync(row.source_path))
+        .map((row) => ({
+            id: `imported:${row.id}`,
+            project_id: row.project_id,
+            title: row.title,
+            video_url: row.video_url,
+            ...(row.thumbnail_url ? { thumbnail_url: row.thumbnail_url } : {}),
+            created_at: row.created_at,
+            source: 'imported' as const,
+            source_id: row.id
+        }));
+
+    const batchRows = db.prepare(`
+        SELECT id, project_id, prompt, generated_video_url, created_at, duration
+        FROM batch_tasks
+        WHERE project_id = ?
+          AND status = 'completed'
+          AND generated_video_url IS NOT NULL
+          AND COALESCE(gallery_hidden, 0) = 0
+        ORDER BY created_at DESC
+    `).all(projectId) as Array<{
+        id: string;
+        project_id: string;
+        prompt?: string | null;
+        generated_video_url: string;
+        created_at: string;
+        duration?: number | null;
+    }>;
+
+    const batch = batchRows
+        .filter((row) => {
+            const filePath = getFilePathFromUrl(row.generated_video_url);
+            return !!filePath && fs.existsSync(filePath);
+        })
+        .map((row) => ({
+            id: `batch:${row.id}`,
+            project_id: row.project_id,
+            title: row.prompt?.trim() || path.basename(row.generated_video_url),
+            video_url: row.generated_video_url,
+            created_at: row.created_at,
+            source: 'batch' as const,
+            source_id: row.id,
+            ...(typeof row.duration === 'number' ? { duration: row.duration } : {})
+        }));
+
+    return [...imported, ...batch].sort((a, b) => (
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    ));
+};
+
 const hardDeleteAssets = (ids: string[]) => {
     try {
         if (!ids || ids.length === 0) return;
@@ -854,7 +979,268 @@ app.post('/api/upload', upload.single('file'), (req: any, res: any) => {
     }
     const projectId = req.body.projectId || 'default-project';
     const url = `/uploads/${projectId}/${req.file.filename}`;
-    res.json({ url, type: req.file.mimetype });
+    const shouldImportToGallery = req.body.importToProjectVideos === 'true' && req.file.mimetype.startsWith('video/');
+
+    if (!shouldImportToGallery) {
+        return res.json({ url, type: req.file.mimetype });
+    }
+
+    try {
+        const title = req.file.originalname.replace(/\.[^.]+$/, '');
+        const sourcePath = req.file.path;
+        const thumbDir = getProjectVideoThumbDir(projectId);
+        const thumbnailFileName = `${path.parse(req.file.filename).name}.jpg`;
+        const thumbnailPath = path.join(thumbDir, thumbnailFileName);
+        const thumbnailCreated = createVideoThumbnail(sourcePath, thumbnailPath);
+        const thumbnailUrl = thumbnailCreated
+            ? toUploadsUrl(projectId, '_video_thumbs', thumbnailFileName)
+            : null;
+
+        const existing = db.prepare('SELECT id FROM project_videos WHERE project_id = ? AND source_path = ?').get(projectId, sourcePath) as { id: string } | undefined;
+        const sourceId = existing?.id || crypto.randomUUID();
+
+        if (existing) {
+            db.prepare(`
+                UPDATE project_videos
+                SET title = ?, video_url = ?, thumbnail_url = ?, updated_at = CURRENT_TIMESTAMP, gallery_hidden = 0
+                WHERE id = ?
+            `).run(title, url, thumbnailUrl, existing.id);
+        } else {
+            db.prepare(`
+                INSERT INTO project_videos (id, project_id, title, video_url, thumbnail_url, source_path)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `).run(sourceId, projectId, title, url, thumbnailUrl, sourcePath);
+        }
+
+        io.emit('videos:update', { projectId, videos: getProjectGalleryVideos(projectId) });
+
+        return res.json({
+            url: thumbnailUrl || url,
+            type: req.file.mimetype,
+            sourceVideoUrl: url,
+            sourceKind: 'imported',
+            sourceId,
+            title
+        });
+    } catch (err: any) {
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/projects/:id/videos', (req: any, res: any) => {
+    try {
+        res.json(getProjectGalleryVideos(req.params.id));
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/projects/:id/videos/scan', async (req: any, res: any) => {
+    const projectId = req.params.id;
+    const importDir = getProjectVideoImportDir(projectId);
+
+    if (!fs.existsSync(importDir)) {
+        return res.json({ success: true, added: 0, updated: 0 });
+    }
+
+    try {
+        const files = fs.readdirSync(importDir).filter(isVideoFileName);
+        let added = 0;
+        let updated = 0;
+
+        for (const file of files) {
+            const sourcePath = path.join(importDir, file);
+            const title = path.parse(file).name;
+            const videoUrl = toUploadsUrl(projectId, '_videos', file);
+            const thumbDir = getProjectVideoThumbDir(projectId);
+            const thumbnailFileName = `${title}.jpg`;
+            const thumbnailPath = path.join(thumbDir, thumbnailFileName);
+            const thumbnailCreated = fs.existsSync(thumbnailPath) ? thumbnailPath : createVideoThumbnail(sourcePath, thumbnailPath);
+            const thumbnailUrl = thumbnailCreated ? toUploadsUrl(projectId, '_video_thumbs', thumbnailFileName) : null;
+
+            const existing = db.prepare('SELECT id FROM project_videos WHERE project_id = ? AND source_path = ?').get(projectId, sourcePath) as { id: string } | undefined;
+
+            if (existing) {
+                db.prepare(`
+                    UPDATE project_videos
+                    SET title = ?, video_url = ?, thumbnail_url = ?, updated_at = CURRENT_TIMESTAMP, gallery_hidden = 0
+                    WHERE id = ?
+                `).run(title, videoUrl, thumbnailUrl, existing.id);
+                updated += 1;
+            } else {
+                db.prepare(`
+                    INSERT INTO project_videos (id, project_id, title, video_url, thumbnail_url, source_path)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                `).run(crypto.randomUUID(), projectId, title, videoUrl, thumbnailUrl, sourcePath);
+                added += 1;
+            }
+        }
+
+        io.emit('videos:update', { projectId, videos: getProjectGalleryVideos(projectId) });
+        res.json({ success: true, added, updated });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/projects/:id/videos/send-to-page', (req: any, res: any) => {
+    const projectId = req.params.id;
+    const { source, sourceId, pageId } = req.body as { source?: 'batch' | 'imported'; sourceId?: string; pageId?: string };
+
+    if (!source || !sourceId || !pageId) {
+        return res.status(400).json({ error: 'source, sourceId and pageId are required' });
+    }
+
+    try {
+        let title = 'Video';
+        let videoUrl = '';
+        let thumbnailUrl: string | null = null;
+
+        if (source === 'imported') {
+            const row = db.prepare(`
+                SELECT id, title, video_url, thumbnail_url, source_path
+                FROM project_videos
+                WHERE id = ? AND project_id = ?
+            `).get(sourceId, projectId) as {
+                id: string;
+                title: string;
+                video_url: string;
+                thumbnail_url?: string | null;
+                source_path: string;
+            } | undefined;
+
+            if (!row || !fs.existsSync(row.source_path)) {
+                return res.status(404).json({ error: 'Imported video not found' });
+            }
+
+            title = row.title;
+            videoUrl = row.video_url;
+            thumbnailUrl = row.thumbnail_url || null;
+        } else if (source === 'batch') {
+            const row = db.prepare(`
+                SELECT id, prompt, generated_video_url
+                FROM batch_tasks
+                WHERE id = ? AND project_id = ? AND status = 'completed'
+            `).get(sourceId, projectId) as {
+                id: string;
+                prompt?: string | null;
+                generated_video_url: string;
+            } | undefined;
+
+            if (!row) {
+                return res.status(404).json({ error: 'Generated video not found' });
+            }
+
+            const filePath = getFilePathFromUrl(row.generated_video_url);
+            if (!filePath || !fs.existsSync(filePath)) {
+                return res.status(404).json({ error: 'Generated video file is missing' });
+            }
+
+            title = row.prompt?.trim() || path.basename(row.generated_video_url);
+            videoUrl = row.generated_video_url;
+        } else {
+            return res.status(400).json({ error: 'Unsupported video source' });
+        }
+
+        const page = db.prepare('SELECT id FROM pages WHERE id = ?').get(pageId) as { id: string } | undefined;
+        if (!page) {
+            return res.status(404).json({ error: 'Target page not found' });
+        }
+
+        const countResult = db.prepare('SELECT COUNT(*) as count FROM elements WHERE page_id = ?').get(pageId) as { count: number };
+        const zIndexResult = db.prepare('SELECT MAX(z_index) as maxZ FROM elements WHERE page_id = ?').get(pageId) as { maxZ: number | null };
+        const index = countResult.count;
+        const x = 80 + (index % 4) * 280;
+        const y = 80 + Math.floor(index / 4) * 220;
+        const width = 240;
+        const height = 184;
+        const id = crypto.randomUUID();
+        const content = {
+            url: thumbnailUrl || videoUrl,
+            text: title,
+            sourceVideoUrl: videoUrl,
+            sourceKind: source
+        };
+
+        db.prepare(`
+            INSERT INTO elements (id, page_id, type, x, y, width, height, content, z_index)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(id, pageId, 'video-card', x, y, width, height, JSON.stringify(content), (zIndexResult.maxZ ?? -1) + 1);
+
+        io.emit('element:add', {
+            id,
+            pageId,
+            type: 'video-card',
+            x,
+            y,
+            width,
+            height,
+            content
+        });
+
+        res.json({ success: true, id });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete('/api/projects/:id/videos', (req: any, res: any) => {
+    const projectId = req.params.id;
+    const { source, sourceId } = req.body as { source?: 'batch' | 'imported'; sourceId?: string };
+
+    if (!source || !sourceId) {
+        return res.status(400).json({ error: 'source and sourceId are required' });
+    }
+
+    try {
+        if (source === 'imported') {
+            const row = db.prepare(`
+                SELECT id, source_path, thumbnail_url
+                FROM project_videos
+                WHERE id = ? AND project_id = ?
+            `).get(sourceId, projectId) as { id: string; source_path: string; thumbnail_url?: string | null } | undefined;
+
+            if (!row) {
+                return res.status(404).json({ error: 'Imported video not found' });
+            }
+
+            if (row.source_path && fs.existsSync(row.source_path)) {
+                fs.unlinkSync(row.source_path);
+            }
+
+            const thumbnailPath = row.thumbnail_url ? getFilePathFromUrl(row.thumbnail_url) : '';
+            if (thumbnailPath && fs.existsSync(thumbnailPath)) {
+                fs.unlinkSync(thumbnailPath);
+            }
+
+            db.prepare('DELETE FROM project_videos WHERE id = ?').run(sourceId);
+        } else if (source === 'batch') {
+            const row = db.prepare(`
+                SELECT id, generated_video_url
+                FROM batch_tasks
+                WHERE id = ? AND project_id = ?
+            `).get(sourceId, projectId) as { id: string; generated_video_url?: string | null } | undefined;
+
+            if (!row) {
+                return res.status(404).json({ error: 'Generated video not found' });
+            }
+
+            const filePath = row.generated_video_url ? getFilePathFromUrl(row.generated_video_url) : '';
+            if (filePath && fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+
+            db.prepare('DELETE FROM batch_tasks WHERE id = ?').run(sourceId);
+            io.emit('batch:delete', { id: sourceId });
+        } else {
+            return res.status(400).json({ error: 'Unsupported video source' });
+        }
+
+        io.emit('videos:update', { projectId, videos: getProjectGalleryVideos(projectId) });
+        res.json({ success: true });
+    } catch (err: any) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.post('/api/download-zip', (req: any, res: any) => {

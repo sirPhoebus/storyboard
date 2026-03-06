@@ -39,6 +39,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket, currentProjectId }) => {
     const middleImageInputsRef = useRef<Record<string, HTMLInputElement | null>>({});
     const [scanStatus, setScanStatus] = useState<string | null>(null);
     const [isScanningFolder, setIsScanningFolder] = useState(false);
+    const [isDeletingAll, setIsDeletingAll] = useState(false);
 
     useEffect(() => {
         if (!currentProjectId) {
@@ -114,6 +115,23 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket, currentProjectId }) => {
         fetch(`${API_BASE_URL}/api/batch/tasks/${id}`, { method: 'DELETE' });
     };
 
+    const handleDeleteAllTasks = async () => {
+        if (isDeletingAll || tasks.length === 0) return;
+        const confirmed = window.confirm(`Delete all ${tasks.length} batch item${tasks.length === 1 ? '' : 's'}?`);
+        if (!confirmed) return;
+
+        setIsDeletingAll(true);
+        try {
+            await Promise.all(tasks.map(task =>
+                fetch(`${API_BASE_URL}/api/batch/tasks/${task.id}`, { method: 'DELETE' })
+            ));
+        } catch (err) {
+            console.error('Failed to delete all batch tasks:', err);
+        } finally {
+            setIsDeletingAll(false);
+        }
+    };
+
     const handleFetchVideoByTaskId = async (id: string) => {
         const res = await fetch(`${API_BASE_URL}/api/batch/tasks/${id}/fetch-video`, { method: 'POST' });
         const data = await res.json();
@@ -142,7 +160,15 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket, currentProjectId }) => {
             const res = await fetch(`${API_BASE_URL}/api/projects/${encodeURIComponent(currentProjectId)}/videos/scan`, {
                 method: 'POST'
             });
-            const data = await res.json();
+            const raw = await res.text();
+            let data: any = {};
+            if (raw) {
+                try {
+                    data = JSON.parse(raw);
+                } catch {
+                    data = { error: raw };
+                }
+            }
             if (!res.ok) {
                 throw new Error(data.error || 'Failed to scan project video folder');
             }
@@ -273,6 +299,15 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket, currentProjectId }) => {
                         </div>
                     </div>
                     <div style={{ display: 'flex', gap: '12px' }}>
+                        <button
+                            onClick={() => { handleDeleteAllTasks().catch(err => console.error('Failed to delete all batch tasks:', err)); }}
+                            style={{ background: 'rgba(231, 76, 60, 0.12)', color: '#ffb3ad', border: '1px solid rgba(231, 76, 60, 0.35)', borderRadius: '12px', padding: '12px 18px', fontSize: '15px', fontWeight: 600, cursor: (isDeletingAll || tasks.length === 0) ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px', opacity: (isDeletingAll || tasks.length === 0) ? 0.6 : 1 }}
+                            disabled={isDeletingAll || tasks.length === 0}
+                            title="Delete all batch items"
+                        >
+                            <Trash2 size={18} />
+                            {isDeletingAll ? 'Deleting All...' : 'Delete All'}
+                        </button>
                         <button
                             onClick={() => { handleScanProjectVideos().catch(err => console.error('Failed to scan project videos:', err)); }}
                             style={{ background: 'rgba(255,255,255,0.06)', color: 'white', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '12px', padding: '12px 18px', fontSize: '15px', fontWeight: 600, cursor: isScanningFolder ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
