@@ -2,7 +2,8 @@
 import React from 'react';
 import { API_BASE_URL } from '../config';
 import type { Page, Chapter, Project } from '../types';
-import { Clapperboard, ExternalLink, Film } from 'lucide-react';
+import { ArrowRightLeft, Clapperboard, Copy, ExternalLink, Film } from 'lucide-react';
+import { readCachedData } from '../utils/queryCache';
 
 interface SidebarProps {
     chapters: Chapter[];
@@ -117,6 +118,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     const [pageToDuplicate, setPageToDuplicate] = React.useState<string | null>(null);
     const [chapterToDelete, setChapterToDelete] = React.useState<string | null>(null);
     const [movingPageId, setMovingPageId] = React.useState<string | null>(null);
+    const [pageItemCounts, setPageItemCounts] = React.useState<Record<string, number>>({});
 
     const startResizing = React.useCallback((e: React.MouseEvent) => {
         e.preventDefault();
@@ -145,6 +147,46 @@ const Sidebar: React.FC<SidebarProps> = ({
             window.removeEventListener('mouseup', stopResizing);
         };
     }, [isResizing, resize, stopResizing]);
+
+    React.useEffect(() => {
+        let cancelled = false;
+
+        const loadCounts = async () => {
+            const initialCounts: Record<string, number> = {};
+
+            pages.forEach((page) => {
+                const cachedElements = readCachedData<unknown[]>(`elements:${page.id}`);
+                if (Array.isArray(cachedElements)) {
+                    initialCounts[page.id] = cachedElements.length;
+                }
+            });
+
+            if (!cancelled && Object.keys(initialCounts).length > 0) {
+                setPageItemCounts((prev) => ({ ...prev, ...initialCounts }));
+            }
+
+            await Promise.all(pages.map(async (page) => {
+                try {
+                    const res = await fetch(`${API_BASE_URL}/api/elements/${page.id}`);
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    if (!Array.isArray(data) || cancelled) return;
+                    setPageItemCounts((prev) => {
+                        if (prev[page.id] === data.length) return prev;
+                        return { ...prev, [page.id]: data.length };
+                    });
+                } catch {
+                    // Count fetch is best effort.
+                }
+            }));
+        };
+
+        loadCounts().catch(() => undefined);
+
+        return () => {
+            cancelled = true;
+        };
+    }, [pages]);
 
     const handleMovePageToChapter = async (pageId: string, chapterId: string, e: React.MouseEvent) => {
         e.stopPropagation();
@@ -595,7 +637,14 @@ const Sidebar: React.FC<SidebarProps> = ({
                                                 padding: '0'
                                             }}
                                         />
-                                    ) : page.title}
+                                    ) : (
+                                        <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: '6px', minWidth: 0 }}>
+                                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{page.title}</span>
+                                            <span style={{ fontSize: '11px', color: '#8fa3b8', flexShrink: 0 }}>
+                                                ({pageItemCounts[page.id] ?? 0})
+                                            </span>
+                                        </span>
+                                    )}
                                 </div>
                                 <button
                                     onClick={(e) => {
@@ -605,7 +654,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                                     title="Move to Chapter"
                                     style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#aaa', fontSize: '14px', padding: '0 4px' }}
                                 >
-                                    {'>'}
+                                    <ArrowRightLeft size={14} />
                                 </button>
                                 <button
                                     onClick={(e) => {
@@ -613,9 +662,9 @@ const Sidebar: React.FC<SidebarProps> = ({
                                         setPageToDuplicate(page.id);
                                     }}
                                     title="Duplicate"
-                                    style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#aaa', fontSize: '16px' }}
+                                    style={{ cursor: 'pointer', background: 'none', border: 'none', color: '#aaa', display: 'grid', placeItems: 'center' }}
                                 >
-                                    *
+                                    <Copy size={14} />
                                 </button>
                                 <button
                                     onClick={(e) => {
@@ -754,7 +803,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                         gap: '6px'
                     }}>
                         <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#2ecc71' }} />
-                        viewer(s) : {connectedUsers}
+                        viewers: {connectedUsers}
                     </div>
                 ) : (
                     <div style={{ fontSize: '12px', color: '#2ecc71', fontWeight: 'bold' }}>{connectedUsers}</div>

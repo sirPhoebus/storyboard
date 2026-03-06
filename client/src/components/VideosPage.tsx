@@ -3,6 +3,7 @@ import type { Socket } from 'socket.io-client';
 import { Play, RefreshCw, Send, Trash2, X } from 'lucide-react';
 import { API_BASE_URL } from '../config';
 import type { Chapter, GalleryVideo, Page } from '../types';
+import { fetchCachedJson, invalidateCache, readCachedData, setCachedData } from '../utils/queryCache';
 
 interface VideosPageProps {
     socket: Socket | null;
@@ -23,27 +24,29 @@ const VideosPage: React.FC<VideosPageProps> = ({ socket, currentProjectId, chapt
     const [sendError, setSendError] = React.useState<string | null>(null);
     const [sending, setSending] = React.useState(false);
     const [deletingVideoId, setDeletingVideoId] = React.useState<string | null>(null);
-    const fetchControllerRef = React.useRef<AbortController | null>(null);
 
-    const fetchTasks = React.useCallback(() => {
-        fetchControllerRef.current?.abort();
+    const fetchTasks = React.useCallback((forceRefresh = false) => {
         if (!currentProjectId) {
             setVideos([]);
             setLoading(false);
             return;
         }
-        const controller = new AbortController();
-        fetchControllerRef.current = controller;
-        setLoading(true);
-        fetch(`${API_BASE_URL}/api/projects/${encodeURIComponent(currentProjectId)}/videos`, { signal: controller.signal })
-            .then((res) => {
-                if (!res.ok) {
-                    throw new Error(`Failed to fetch videos: ${res.status}`);
-                }
-                return res.json();
-            })
+        const cacheKey = `videos:${currentProjectId}`;
+        const cachedVideos = readCachedData<GalleryVideo[]>(cacheKey);
+        if (Array.isArray(cachedVideos)) {
+            setVideos(cachedVideos);
+            setLoading(false);
+        } else {
+            setLoading(true);
+        }
+
+        fetchCachedJson<GalleryVideo[]>(
+            cacheKey,
+            `${API_BASE_URL}/api/projects/${encodeURIComponent(currentProjectId)}/videos`,
+            undefined,
+            { ttlMs: 20_000, forceRefresh }
+        )
             .then((data) => {
-                if (controller.signal.aborted) return;
                 if (!Array.isArray(data)) {
                     setVideos([]);
                     return;
@@ -51,26 +54,16 @@ const VideosPage: React.FC<VideosPageProps> = ({ socket, currentProjectId, chapt
                 setVideos(data);
             })
             .catch((err) => {
-                if (controller.signal.aborted) return;
                 console.error('Failed to fetch videos:', err);
                 setVideos([]);
             })
             .finally(() => {
-                if (fetchControllerRef.current === controller) {
-                    fetchControllerRef.current = null;
-                }
-                if (!controller.signal.aborted) {
-                    setLoading(false);
-                }
+                setLoading(false);
             });
     }, [currentProjectId]);
 
     React.useEffect(() => {
         fetchTasks();
-        return () => {
-            fetchControllerRef.current?.abort();
-            fetchControllerRef.current = null;
-        };
     }, [fetchTasks]);
 
     React.useEffect(() => {
@@ -79,22 +72,27 @@ const VideosPage: React.FC<VideosPageProps> = ({ socket, currentProjectId, chapt
         const syncBatchVideo = (task: { project_id?: string; status?: string; generated_video_url?: string }) => {
             if (task.project_id !== currentProjectId) return;
             if (task.status !== 'completed' || !task.generated_video_url) {
-                fetchTasks();
+                invalidateCache(`videos:${currentProjectId}`);
+                fetchTasks(true);
                 return;
             }
-            fetchTasks();
+            invalidateCache(`videos:${currentProjectId}`);
+            fetchTasks(true);
         };
         const syncDeletedBatchVideo = (_payload: { id: string }) => {
-            fetchTasks();
+            if (currentProjectId) invalidateCache(`videos:${currentProjectId}`);
+            fetchTasks(true);
         };
         const syncImportedVideos = (payload: { projectId: string; videos?: GalleryVideo[] }) => {
             if (payload.projectId !== currentProjectId) return;
             if (Array.isArray(payload.videos)) {
                 setVideos(payload.videos);
+                setCachedData(`videos:${payload.projectId}`, payload.videos, 20_000);
                 setLoading(false);
                 return;
             }
-            fetchTasks();
+            invalidateCache(`videos:${currentProjectId}`);
+            fetchTasks(true);
         };
 
         socket.on('batch:add', syncBatchVideo);
@@ -169,7 +167,8 @@ const VideosPage: React.FC<VideosPageProps> = ({ socket, currentProjectId, chapt
             }
             setSendVideo(null);
             closePlaybackModal();
-            fetchTasks();
+            invalidateCache(`videos:${currentProjectId}`);
+            fetchTasks(true);
         } catch (err: any) {
             setSendError(err.message || 'Failed to send video to page');
         } finally {
@@ -218,7 +217,8 @@ const VideosPage: React.FC<VideosPageProps> = ({ socket, currentProjectId, chapt
             setSelectedVideoIds([]);
             setSendVideo(null);
             closePlaybackModal();
-            fetchTasks();
+            invalidateCache(`videos:${currentProjectId}`);
+            fetchTasks(true);
         } catch (err: any) {
             setSendError(err.message || 'Failed to send selected videos to page');
         } finally {
@@ -240,6 +240,7 @@ const VideosPage: React.FC<VideosPageProps> = ({ socket, currentProjectId, chapt
         if (!res.ok) {
             throw new Error(data.error || 'Failed to delete video');
         }
+        invalidateCache(`videos:${currentProjectId}`);
     }, [currentProjectId]);
 
     const handleDeleteVideo = React.useCallback(async (event: React.MouseEvent, video: GalleryVideo) => {
@@ -253,7 +254,32 @@ const VideosPage: React.FC<VideosPageProps> = ({ socket, currentProjectId, chapt
             setSendVideo((prev) => prev?.id === video.id ? null : prev);
             setPlaybackQueue((prev) => prev.filter((item) => item.id !== video.id));
             setPlaybackIndex(0);
-            fetchTasks();
+            fetchTasks(true);
+        } catch (err: any) {
+            setSendError(err.message || 'Failed to delete video');
+        } finally {
+            setDeletingVideoId(null);
+        }
+    }, [currentProjectId, deleteVideoByItem, deletingVideoId, fetchTasks]);
+
+    const handleDeleteVideoFromModal = React.useCallback(async (video: GalleryVideo) => {
+        if (!currentProjectId || deletingVideoId) return;
+        setDeletingVideoId(video.id);
+        setSendError(null);
+        try {
+            await deleteVideoByItem(video);
+            setSelectedVideoIds((prev) => prev.filter((id) => id !== video.id));
+            setSendVideo((prev) => prev?.id === video.id ? null : prev);
+            setPlaybackQueue((prev) => {
+                const next = prev.filter((item) => item.id !== video.id);
+                if (next.length === 0) {
+                    setPlaybackIndex(0);
+                    return next;
+                }
+                setPlaybackIndex((current) => Math.min(current, next.length - 1));
+                return next;
+            });
+            fetchTasks(true);
         } catch (err: any) {
             setSendError(err.message || 'Failed to delete video');
         } finally {
@@ -272,7 +298,7 @@ const VideosPage: React.FC<VideosPageProps> = ({ socket, currentProjectId, chapt
             setSelectedVideoIds([]);
             setSendVideo(null);
             closePlaybackModal();
-            fetchTasks();
+            fetchTasks(true);
         } catch (err: any) {
             setSendError(err.message || 'Failed to delete selected videos');
         } finally {
@@ -400,7 +426,7 @@ const VideosPage: React.FC<VideosPageProps> = ({ socket, currentProjectId, chapt
                             Play All
                         </button>
                         <button
-                            onClick={fetchTasks}
+                            onClick={() => fetchTasks(true)}
                             style={{
                                 display: 'inline-flex',
                                 alignItems: 'center',
@@ -483,7 +509,6 @@ const VideosPage: React.FC<VideosPageProps> = ({ socket, currentProjectId, chapt
                                             background: 'linear-gradient(180deg, rgba(15,23,42,0.02) 0%, rgba(15,23,42,0.55) 100%)'
                                         }} />
                                     </div>
-                                    <div style={{ fontSize: '13px', color: '#cbd5e1', marginBottom: '6px' }}>{video.title || 'Untitled video'}</div>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                                         <div style={{ fontSize: '11px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
                                             {video.source === 'imported' ? 'Imported' : `${video.duration || 0}s generated`}
@@ -576,7 +601,49 @@ const VideosPage: React.FC<VideosPageProps> = ({ socket, currentProjectId, chapt
                                     </div>
                                 )}
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                <button
+                                    onClick={() => {
+                                        setSendError(null);
+                                        setSendVideo(currentPlaybackVideo);
+                                    }}
+                                    style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '8px',
+                                        background: 'rgba(14, 165, 233, 0.12)',
+                                        border: '1px solid rgba(125, 211, 252, 0.24)',
+                                        color: '#e0f2fe',
+                                        borderRadius: '999px',
+                                        padding: '8px 12px',
+                                        cursor: 'pointer',
+                                        fontSize: '12px'
+                                    }}
+                                >
+                                    <Send size={14} />
+                                    Send
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        handleDeleteVideoFromModal(currentPlaybackVideo).catch((err) => console.error('Failed to delete video from modal:', err));
+                                    }}
+                                    disabled={deletingVideoId === currentPlaybackVideo.id}
+                                    style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '8px',
+                                        background: 'rgba(127, 29, 29, 0.18)',
+                                        border: '1px solid rgba(248, 113, 113, 0.28)',
+                                        color: '#fee2e2',
+                                        borderRadius: '999px',
+                                        padding: '8px 12px',
+                                        cursor: deletingVideoId === currentPlaybackVideo.id ? 'wait' : 'pointer',
+                                        fontSize: '12px'
+                                    }}
+                                >
+                                    <Trash2 size={14} />
+                                    Delete
+                                </button>
                                 {playbackQueue.length > 1 && (
                                     <>
                                         <button

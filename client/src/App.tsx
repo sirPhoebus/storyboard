@@ -10,10 +10,7 @@ import HelpManual from './components/HelpManual'
 import BatchPage from './components/BatchPage'
 import ChatRoomModal from './components/ChatRoomModal'
 import VideosPage from './components/VideosPage'
-
-
-
-/* ... imports */
+import { fetchCachedJson, invalidateCache, readCachedData, setCachedData } from './utils/queryCache'
 function App() {
   const socket = useSocket();
   const { projects, currentProjectId, setCurrentProjectId, createProject, renameProject, deleteProject } = useProjects(socket);
@@ -58,8 +55,18 @@ function App() {
       setCurrentStoryboardId(null);
       setView('videos');
 
-      fetch(`${API_BASE_URL}/api/projects/${currentProjectId}/storyboard`)
-        .then(res => res.json())
+      const cacheKey = `storyboard:${currentProjectId}`;
+      const cachedStoryboard = readCachedData<{ id: string }>(cacheKey);
+      if (cachedStoryboard?.id) {
+        setCurrentStoryboardId(cachedStoryboard.id);
+      }
+
+      fetchCachedJson<{ id: string }>(
+        cacheKey,
+        `${API_BASE_URL}/api/projects/${currentProjectId}/storyboard`,
+        undefined,
+        { ttlMs: 60_000 }
+      )
         .then(data => {
           if (data && data.id) {
             setCurrentStoryboardId(data.id);
@@ -73,8 +80,21 @@ function App() {
   const fetchChapters = useCallback(() => {
     if (!currentStoryboardId) return;
 
-    fetch(`${API_BASE_URL}/api/chapters?storyboardId=${currentStoryboardId}`)
-      .then(res => res.json())
+    const cacheKey = `chapters:${currentStoryboardId}`;
+    const cachedChapters = readCachedData<Chapter[]>(cacheKey);
+    if (Array.isArray(cachedChapters)) {
+      setChapters(cachedChapters);
+      if (cachedChapters.length > 0 && (!currentChapterId || !cachedChapters.find((chapter: Chapter) => chapter.id === currentChapterId))) {
+        setCurrentChapterId(cachedChapters[0].id);
+      }
+    }
+
+    fetchCachedJson<Chapter[]>(
+      cacheKey,
+      `${API_BASE_URL}/api/chapters?storyboardId=${currentStoryboardId}`,
+      undefined,
+      { ttlMs: 30_000 }
+    )
       .then(data => {
         if (!Array.isArray(data)) {
           console.error('API Error: Expected array for chapters, got:', data);
@@ -90,10 +110,23 @@ function App() {
   const fetchPages = useCallback(() => {
     if (!currentStoryboardId) return;
 
+    const cacheKey = `pages:${currentStoryboardId}`;
     const url = `${API_BASE_URL}/api/pages?storyboardId=${currentStoryboardId}`;
+    const cachedPages = readCachedData<Page[]>(cacheKey);
+    if (Array.isArray(cachedPages)) {
+      setAllPages(cachedPages);
+      const normalPages = cachedPages.filter((page: Page) => page.type !== 'videos');
+      if (normalPages.length > 0) {
+        const firstPageInChapter = normalPages.find((p: Page) => p.chapter_id === currentChapterId);
+        if (!currentPageId || !normalPages.find((p: Page) => p.id === currentPageId)) {
+          setCurrentPageId(firstPageInChapter ? firstPageInChapter.id : normalPages[0].id);
+        }
+      } else {
+        setCurrentPageId(null);
+      }
+    }
 
-    fetch(url)
-      .then(res => res.json())
+    fetchCachedJson<Page[]>(cacheKey, url, undefined, { ttlMs: 30_000 })
       .then(data => {
         if (!Array.isArray(data)) {
           console.error('API Error: Expected array for pages, got:', data);
@@ -124,31 +157,59 @@ function App() {
       });
 
       socket.on('chapter:add', (chapter: Chapter) => {
-        setChapters(prev => [...prev].some(c => c.id === chapter.id) ? prev : [...prev, chapter]);
+        setChapters(prev => {
+          const next = [...prev].some(c => c.id === chapter.id) ? prev : [...prev, chapter];
+          if (currentStoryboardId) setCachedData(`chapters:${currentStoryboardId}`, next, 30_000);
+          return next;
+        });
       });
 
       socket.on('chapter:update', (data: { id: string, title: string }) => {
-        setChapters(prev => prev.map(c => c.id === data.id ? { ...c, title: data.title } : c));
+        setChapters(prev => {
+          const next = prev.map(c => c.id === data.id ? { ...c, title: data.title } : c);
+          if (currentStoryboardId) setCachedData(`chapters:${currentStoryboardId}`, next, 30_000);
+          return next;
+        });
       });
 
       socket.on('chapter:delete', (data: { id: string }) => {
-        setChapters(prev => prev.filter(c => c.id !== data.id));
-        setAllPages(prev => prev.filter(p => p.chapter_id !== data.id));
+        setChapters(prev => {
+          const next = prev.filter(c => c.id !== data.id);
+          if (currentStoryboardId) setCachedData(`chapters:${currentStoryboardId}`, next, 30_000);
+          return next;
+        });
+        setAllPages(prev => {
+          const next = prev.filter(p => p.chapter_id !== data.id);
+          if (currentStoryboardId) setCachedData(`pages:${currentStoryboardId}`, next, 30_000);
+          return next;
+        });
         if (currentChapterId === data.id) {
           setCurrentChapterId(null);
         }
       });
 
       socket.on('page:add', (page: Page) => {
-        setAllPages(prev => [...prev].some(p => p.id === page.id) ? prev : [...prev, page]);
+        setAllPages(prev => {
+          const next = [...prev].some(p => p.id === page.id) ? prev : [...prev, page];
+          if (currentStoryboardId) setCachedData(`pages:${currentStoryboardId}`, next, 30_000);
+          return next;
+        });
       });
 
       socket.on('page:update', (page: Page) => {
-        setAllPages(prev => prev.map(p => p.id === page.id ? { ...p, ...page } : p));
+        setAllPages(prev => {
+          const next = prev.map(p => p.id === page.id ? { ...p, ...page } : p);
+          if (currentStoryboardId) setCachedData(`pages:${currentStoryboardId}`, next, 30_000);
+          return next;
+        });
       });
 
       socket.on('page:delete', (data: { id: string }) => {
-        setAllPages(prev => prev.filter(p => p.id !== data.id));
+        setAllPages(prev => {
+          const next = prev.filter(p => p.id !== data.id);
+          if (currentStoryboardId) setCachedData(`pages:${currentStoryboardId}`, next, 30_000);
+          return next;
+        });
         if (currentPageId === data.id) {
           setCurrentPageId(null);
         }
@@ -158,6 +219,7 @@ function App() {
         setAllPages(prev => {
           const pageMap = new Map(prev.map(p => [p.id, p]));
           const newOrder = data.order.map(id => pageMap.get(id)).filter(Boolean) as Page[];
+          if (currentStoryboardId) setCachedData(`pages:${currentStoryboardId}`, newOrder, 30_000);
           return newOrder;
         });
       });
@@ -178,7 +240,7 @@ function App() {
         socket.off('chat:message');
       };
     }
-  }, [socket, currentChapterId, currentPageId]);
+  }, [socket, currentChapterId, currentPageId, currentStoryboardId]);
 
   const handlePageSelection = useCallback((pageId: string) => {
     // Find the page to discover its chapter
@@ -239,6 +301,7 @@ function App() {
     })
       .then(res => res.json())
       .then(newChapter => {
+        invalidateCache(`chapters:${currentStoryboardId}`);
         setChapters([...chapters, newChapter]);
         setCurrentChapterId(newChapter.id);
         fetchPages(); // Refresh pages to get the auto-created one
@@ -256,6 +319,8 @@ function App() {
         return res.json();
       })
       .then(() => {
+        invalidateCache(`chapters:${currentStoryboardId}`);
+        invalidateCache(`pages:${currentStoryboardId}`);
         const newChapters = chapters.filter(c => c.id !== chapterId);
         setChapters(newChapters);
         if (currentChapterId === chapterId) {
@@ -273,6 +338,7 @@ function App() {
     })
       .then(res => res.json())
       .then(() => {
+        invalidateCache(`chapters:${currentStoryboardId}`);
         setChapters(chapters.map(c => c.id === id ? { ...c, title: newTitle } : c));
       });
   };
@@ -291,6 +357,7 @@ function App() {
     })
       .then(res => res.json())
       .then(newPage => {
+        invalidateCache(`pages:${currentStoryboardId}`);
         setAllPages([...allPages, newPage]);
         setCurrentPageId(newPage.id);
         setView('canvas');
@@ -306,29 +373,10 @@ function App() {
     })
       .then(res => res.json())
       .then(() => {
+        invalidateCache(`pages:${currentStoryboardId}`);
         setAllPages(allPages.map(p => p.id === id ? { ...p, title: newTitle } : p));
       });
   };
-
-  /*
-  const handleExport = () => {
-    const state = {
-      chapters,
-      pages: allPages,
-      exportedAt: new Date().toISOString(),
-      version: '1.0'
-    };
-    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `storyboard-export-${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-  */
 
   const handleCreateProject = () => {
     const name = prompt('Enter project name:');

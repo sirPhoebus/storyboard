@@ -61,12 +61,13 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
     const fullUrl = url.startsWith('http') ? url : `${API_BASE_URL}${url}`;
 
     // Only fetch image if type is image to save resources
-    const [image] = useImage(type === 'image' || type === 'video-card' ? fullUrl : '', 'anonymous');
+    const [image, imageStatus] = useImage(type === 'image' || type === 'video-card' ? fullUrl : '', 'anonymous');
     const videoRef = useRef<HTMLVideoElement | null>(null);
     const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
     const imageRef = useRef<Konva.Image>(null);
     const [isHovered, setIsHovered] = useState(false);
     const [isVideoPlaying, setIsVideoPlaying] = useState(isPlaying); // Track video playing state
+    const [hasVideoError, setHasVideoError] = useState(false);
 
     // Control video playback based on hover state
     useEffect(() => {
@@ -105,6 +106,7 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
 
             const mountTimer = window.setTimeout(() => setVideoElement(video), 0);
             videoRef.current = video;
+            setHasVideoError(false);
 
             // Proper animation loop for Konva
             let anim: Konva.Animation | null = null;
@@ -132,6 +134,10 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
                 if (imageRef.current && imageRef.current.getLayer()) {
                     imageRef.current.getLayer()?.batchDraw();
                 }
+            };
+
+            video.onerror = () => {
+                setHasVideoError(true);
             };
 
             return () => {
@@ -194,6 +200,10 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
         return stars;
     };
 
+    const hasBrokenMedia = (type === 'image' || type === 'video-card')
+        ? imageStatus === 'failed'
+        : type === 'video' && hasVideoError;
+
     return (
         <Group
             ref={(node) => {
@@ -218,7 +228,39 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
         >
-            {type === 'video-card' ? (
+            {hasBrokenMedia ? (
+                <>
+                    <Rect
+                        width={width}
+                        height={height}
+                        fill="#2a0f14"
+                        cornerRadius={type === 'video-card' ? 18 : 0}
+                        stroke={isSelected ? '#3498db' : 'rgba(248, 113, 113, 0.45)'}
+                        strokeWidth={isSelected ? 4 : 2}
+                        dash={[10, 8]}
+                    />
+                    <Text
+                        text="Broken media"
+                        x={0}
+                        y={Math.max(10, height / 2 - 18)}
+                        width={width}
+                        align="center"
+                        fontSize={Math.max(12, Math.min(18, width / 10))}
+                        fontStyle="bold"
+                        fill="#fecaca"
+                    />
+                    <Text
+                        text={url || 'File not found'}
+                        x={12}
+                        y={Math.max(34, height / 2 + 6)}
+                        width={Math.max(0, width - 24)}
+                        align="center"
+                        fontSize={11}
+                        fill="#fca5a5"
+                        wrap="char"
+                    />
+                </>
+            ) : type === 'video-card' ? (
                 <>
                     <Rect
                         width={width}

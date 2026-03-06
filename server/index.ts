@@ -1166,7 +1166,9 @@ app.post('/api/projects/:id/videos/send-to-page', async (req: any, res: any) => 
             url: thumbnailUrl || videoUrl,
             text: title,
             sourceVideoUrl: videoUrl,
-            sourceKind: source
+            sourceKind: source,
+            originalWidth: width,
+            originalHeight: height
         };
 
         db.prepare(`
@@ -1384,6 +1386,45 @@ const broadcastUserCount = () => {
     io.emit('user_count', count);
 };
 
+const getConnectedUsers = () => {
+    const userMap = new Map<string, { email: string; name: string; picture?: string; connectionCount: number }>();
+
+    for (const socket of io.sockets.sockets.values()) {
+        const user = socket.data.user as AuthedUser | undefined;
+        if (!user?.email || !user?.name) continue;
+
+        const existing = userMap.get(user.email);
+        if (existing) {
+            existing.connectionCount += 1;
+            if (!existing.picture && user.picture) {
+                existing.picture = user.picture;
+            }
+            continue;
+        }
+
+        userMap.set(user.email, {
+            email: user.email,
+            name: user.name,
+            ...(user.picture ? { picture: user.picture } : {}),
+            connectionCount: 1
+        });
+    }
+
+    return Array.from(userMap.values()).sort((a, b) => {
+        if (b.connectionCount !== a.connectionCount) return b.connectionCount - a.connectionCount;
+        return a.name.localeCompare(b.name);
+    });
+};
+
+const broadcastConnectedUsers = () => {
+    io.emit('chat:presence', getConnectedUsers());
+};
+
+const broadcastPresence = () => {
+    broadcastUserCount();
+    broadcastConnectedUsers();
+};
+
 const parseMiddleUrls = (raw: unknown): string[] => {
     if (!raw || typeof raw !== 'string') return [];
     try {
@@ -1477,7 +1518,7 @@ app.post('/api/videos/sync', async (req: any, res: any) => {
                     continue; // Skip this file if we can't get dimensions
                 }
 
-                const content = { url, width, height };
+                const content = { url, width, height, originalWidth: width, originalHeight: height };
 
                 db.prepare('INSERT INTO elements (id, page_id, type, x, y, width, height, content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
                     elementId, videosPage.id, 'video', x, y, width, height, JSON.stringify(content)
@@ -1930,7 +1971,9 @@ app.post('/api/batch/generate', async (req: any, res: any) => {
                                     const content = {
                                         url: videoUrl,
                                         width: width!,
-                                        height: height!
+                                        height: height!,
+                                        originalWidth: width!,
+                                        originalHeight: height!
                                     };
 
                                     db.prepare('INSERT INTO elements (id, page_id, type, x, y, width, height, content) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(
@@ -2025,7 +2068,26 @@ io.on('connection', (socket: any) => {
         };
         console.log(`? A guest connected: ${socket.id}`);
     }
-    broadcastUserCount();
+    broadcastPresence();
+
+    socket.on('chat:presence:request', () => {
+        socket.emit('chat:presence', getConnectedUsers());
+    });
+
+    socket.on('chat:presence:set-name', (rawName: unknown) => {
+        const nextName = typeof rawName === 'string' ? rawName.trim() : '';
+        if (!nextName) return;
+
+        const existingUser = socket.data.user as AuthedUser | undefined;
+        if (!existingUser) return;
+
+        if (existingUser.name === nextName) return;
+        socket.data.user = {
+            ...existingUser,
+            name: nextName
+        };
+        broadcastConnectedUsers();
+    });
 
     socket.on('element:move', (data: any) => {
         try {
@@ -2127,7 +2189,7 @@ io.on('connection', (socket: any) => {
     socket.on('disconnect', () => {
         console.log('? User disconnected:', socket.id);
         // Small delay to ensure the socket is fully removed from internal maps
-        setTimeout(broadcastUserCount, 100);
+        setTimeout(broadcastPresence, 100);
     });
 });
 

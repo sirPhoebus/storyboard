@@ -2,16 +2,21 @@ import { useState, useEffect, useCallback } from 'react';
 import { Socket } from 'socket.io-client';
 import { API_BASE_URL } from '../config';
 import type { Project } from '../types';
+import { fetchCachedJson, readCachedData, setCachedData } from '../utils/queryCache';
 
 export const useProjects = (socket: Socket | null) => {
-    const [projects, setProjects] = useState<Project[]>([]);
+    const [projects, setProjects] = useState<Project[]>(() => readCachedData<Project[]>('projects:list') || []);
     const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
+    const [isLoading, setIsLoading] = useState(projects.length === 0);
 
-    const fetchProjects = useCallback(() => {
+    const fetchProjects = useCallback((forceRefresh = false) => {
         setIsLoading(true);
-        fetch(`${API_BASE_URL}/api/projects`)
-            .then(res => res.json())
+        fetchCachedJson<Project[]>(
+            'projects:list',
+            `${API_BASE_URL}/api/projects`,
+            undefined,
+            { ttlMs: 60_000, forceRefresh }
+        )
             .then((data: Project[]) => {
                 setProjects(data);
                 if (data.length > 0 && !currentProjectId) {
@@ -33,16 +38,25 @@ export const useProjects = (socket: Socket | null) => {
         if (!socket) return;
 
         socket.on('project:add', (project: Project) => {
-            setProjects(prev => [...prev, project]);
+            setProjects(prev => {
+                const next = prev.some((item) => item.id === project.id) ? prev : [...prev, project];
+                setCachedData('projects:list', next, 60_000);
+                return next;
+            });
         });
 
         socket.on('project:update', (project: Project) => {
-            setProjects(prev => prev.map(p => p.id === project.id ? project : p));
+            setProjects(prev => {
+                const next = prev.map(p => p.id === project.id ? project : p);
+                setCachedData('projects:list', next, 60_000);
+                return next;
+            });
         });
 
         socket.on('project:delete', (data: { id: string }) => {
             setProjects(prev => {
                 const filtered = prev.filter(p => p.id !== data.id);
+                setCachedData('projects:list', filtered, 60_000);
                 // If current project was deleted, switch to first available
                 if (currentProjectId === data.id && filtered.length > 0) {
                     setCurrentProjectId(filtered[0].id);

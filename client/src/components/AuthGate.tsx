@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { API_BASE_URL } from '../config';
 import type { AuthUser } from '../types';
+import { fetchCachedJson, readCachedData } from '../utils/queryCache';
 
 interface AuthGateProps {
     onAuthenticated: (token: string, user: AuthUser) => void;
@@ -9,15 +10,19 @@ interface AuthGateProps {
 export default function AuthGate({ onAuthenticated }: AuthGateProps) {
     const buttonRef = useRef<HTMLDivElement | null>(null);
     const [error, setError] = useState('');
-    const [clientId, setClientId] = useState<string | null>(null);
-    const [loadingConfig, setLoadingConfig] = useState(true);
+    const [clientId, setClientId] = useState<string | null>(() => {
+        const cached = readCachedData<{ googleEnabled: boolean; googleClientId: string | null }>('auth:config');
+        return cached?.googleEnabled ? cached.googleClientId : null;
+    });
+    const [loadingConfig, setLoadingConfig] = useState(() => !readCachedData('auth:config'));
 
     useEffect(() => {
-        fetch(`${API_BASE_URL}/api/auth/config`)
-            .then(async (res) => {
-                if (!res.ok) throw new Error('Failed to load auth config');
-                return res.json() as Promise<{ googleEnabled: boolean; googleClientId: string | null }>;
-            })
+        fetchCachedJson<{ googleEnabled: boolean; googleClientId: string | null }>(
+            'auth:config',
+            `${API_BASE_URL}/api/auth/config`,
+            undefined,
+            { ttlMs: 60_000 }
+        )
             .then((cfg) => {
                 setClientId(cfg.googleEnabled ? cfg.googleClientId : null);
                 if (!cfg.googleEnabled) {

@@ -8,6 +8,7 @@ import { UploadProgress } from './canvas/UploadProgress';
 import { NoPagePlaceholder } from './canvas/NoPagePlaceholder';
 import { API_BASE_URL } from '../config';
 import type { Element, Chapter, Page } from '../types';
+import { fetchCachedJson, readCachedData, setCachedData } from '../utils/queryCache';
 
 interface CanvasProps {
     pageId: string | null;
@@ -25,6 +26,16 @@ import type { UploadState } from './canvas/UploadProgress';
 interface RawElement extends Partial<Element> {
     content: string | Record<string, unknown>;
 }
+
+const mapRawElements = (data: RawElement[]): Element[] =>
+    data.map((el) => {
+        const content = typeof el.content === 'string' ? JSON.parse(el.content) : el.content;
+        return {
+            ...content,
+            ...el,
+            content
+        };
+    });
 
 const areNumberArraysEqual = (a?: number[], b?: number[]) => {
     if (a === b) return true;
@@ -92,8 +103,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     const transformerRef = useRef<Konva.Transformer>(null);
     // Element refs map
     const elementRefs = useRef<{ [key: string]: Konva.Node }>({});
-
-    // NOTE: selectedNodeRef is removed, using elementRefs instead
 
     // State Refs for stable handlers
     const elementsRef = useRef(elements);
@@ -208,19 +217,23 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             setStageScale(1);
         }
 
-        fetch(`${API_BASE_URL}/api/elements/${pageId}`)
+        const cacheKey = `elements:${pageId}`;
+        const cachedElements = readCachedData<Element[]>(cacheKey);
+        if (Array.isArray(cachedElements)) {
+            setElements(cachedElements);
+        }
 
-            .then(res => res.json())
+        fetchCachedJson<RawElement[]>(
+            cacheKey,
+            `${API_BASE_URL}/api/elements/${pageId}`,
+            undefined,
+            { ttlMs: 15_000 }
+        )
             .then((data: unknown) => {
                 if (Array.isArray(data)) {
-                    setElements((data as RawElement[]).map(el => {
-                        const content = typeof el.content === 'string' ? JSON.parse(el.content) : el.content;
-                        return {
-                            ...content, // stale data from JSON
-                            ...el,      // fresh data from table columns (id, type, x, y, width, height, etc.)
-                            content: content // Keep parsed content for reference
-                        };
-                    }));
+                    const next = mapRawElements(data as RawElement[]);
+                    setElements(next);
+                    setCachedData(cacheKey, next, 15_000);
                 } else {
                     console.error('API Error: Expected array for elements, got:', data);
                     setElements([]);
@@ -239,6 +252,12 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
 
         const handleSocketMove = (data: { id: string, x: number, y: number }) => {
             applyElementPatch(data.id, { x: data.x, y: data.y });
+            const currentPageId = pageIdRef.current;
+            const cacheKey = currentPageId ? `elements:${currentPageId}` : null;
+            const cached = cacheKey ? readCachedData<Element[]>(cacheKey) : null;
+            if (cacheKey && Array.isArray(cached)) {
+                setCachedData(cacheKey, cached.map((el) => el.id === data.id ? { ...el, x: data.x, y: data.y } : el), 15_000);
+            }
         };
 
         const handleSocketUpdate = (data: { id: string, content?: Record<string, unknown> } & Partial<Element>) => {
@@ -246,6 +265,12 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             const patch = mergeDefinedFields<Element>(content as Partial<Element> | undefined, otherFields);
             if (Object.keys(patch).length === 0) return;
             applyElementPatch(id, patch);
+            const currentPageId = pageIdRef.current;
+            const cacheKey = currentPageId ? `elements:${currentPageId}` : null;
+            const cached = cacheKey ? readCachedData<Element[]>(cacheKey) : null;
+            if (cacheKey && Array.isArray(cached)) {
+                setCachedData(cacheKey, cached.map((el) => el.id === id ? { ...el, ...patch } : el), 15_000);
+            }
         };
 
         const handleSocketAdd = (data: Element & { content: Record<string, unknown>, pageId: string }) => {
@@ -260,7 +285,9 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                     return prev;
                 }
                 console.log('✅ Adding new element to canvas');
-                return [...prev, { ...data, ...data.content }];
+                const next = [...prev, { ...data, ...data.content }];
+                setCachedData(`elements:${data.pageId}`, next, 15_000);
+                return next;
             });
         };
 
@@ -273,7 +300,12 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                     return prev;
                 }
                 console.log('🗑️ Deleting element:', data.id);
-                return prev.filter(el => el.id !== data.id);
+                const next = prev.filter(el => el.id !== data.id);
+                const currentPageId = pageIdRef.current;
+                if (currentPageId) {
+                    setCachedData(`elements:${currentPageId}`, next, 15_000);
+                }
+                return next;
             });
             if (selectedIdsRef.current.includes(data.id)) {
                 setSelectedIds(prev => prev.filter(id => id !== data.id));
@@ -286,6 +318,9 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 const elementMap = new Map(prev.map(el => [el.id, el]));
                 const reordered = data.order.map(id => elementMap.get(id)).filter(Boolean) as Element[];
                 const unchanged = reordered.length === prev.length && reordered.every((el, index) => el === prev[index]);
+                if (!unchanged) {
+                    setCachedData(`elements:${data.pageId}`, reordered, 15_000);
+                }
                 return unchanged ? prev : reordered;
             });
         };
@@ -319,15 +354,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             transformerRef.current.getLayer()?.batchDraw();
         }
     }, [selectedIds]);
-
-    // Debug: Log socket status
-    useEffect(() => {
-        if (socket) {
-            console.log('🔌 Socket object:', socket.id, 'connected:', socket.connected);
-        } else {
-            console.warn('⚠️ Socket object is null');
-        }
-    }, [socket]);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -430,12 +456,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             console.error('Failed to delete elements:', err);
         }
     };
-
-    /*
-    const handleDeleteElement = (id: string) => {
-        handleDeleteElements([id]);
-    };
-    */
 
     const handleMoveSelectionToPage = async (targetPageId: string) => {
         if (!targetPageId || targetPageId === pageId) return;
@@ -1113,9 +1133,15 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                         url: data.url,
                         text: data.title,
                         sourceVideoUrl: data.sourceVideoUrl,
-                        sourceKind: data.sourceKind
+                        sourceKind: data.sourceKind,
+                        originalWidth: data.width,
+                        originalHeight: data.height
                     }
-                    : { url: data.url }
+                    : {
+                        url: data.url,
+                        originalWidth: data.width,
+                        originalHeight: data.height
+                    }
             };
 
             try {
@@ -1278,6 +1304,10 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
 
     const stageWidth = window.innerWidth - (isSidebarCollapsed ? 60 : sidebarWidth);
     const stageHeight = window.innerHeight;
+    const getCenteredViewport = useCallback(() => ({
+        x: stageWidth / 2,
+        y: stageHeight / 2
+    }), [stageHeight, stageWidth]);
     const viewportOverscan = 600;
     const selectedIdsSet = useMemo(() => new Set(selectedIds), [selectedIds]);
     const editingElement = useMemo(
@@ -1425,15 +1455,77 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         setVideoModal({ url, title });
     }, []);
 
-    const handleCreateGrid = async () => {
+    const handleResetViewport = useCallback(() => {
+        const centeredViewport = getCenteredViewport();
+        const mediaPatches = elementsRef.current
+            .filter((element) => isMediaElementType(element.type))
+            .map((element) => {
+                const originalWidth = element.originalWidth;
+                const originalHeight = element.originalHeight;
+                if (!originalWidth || !originalHeight) return null;
+                if (element.width === originalWidth && element.height === originalHeight) return null;
+                return {
+                    id: element.id,
+                    width: originalWidth,
+                    height: originalHeight
+                };
+            })
+            .filter((item): item is { id: string; width: number; height: number } => !!item);
+
+        setStageScale(1);
+        setStagePos(centeredViewport);
+
+        if (mediaPatches.length > 0) {
+            saveToHistory();
+            setElements((prev) => prev.map((element) => {
+                const patch = mediaPatches.find((item) => item.id === element.id);
+                if (!patch) return element;
+                return { ...element, width: patch.width, height: patch.height };
+            }));
+
+            mediaPatches.forEach((patch) => {
+                if (socket) {
+                    socket.emit('element:update', {
+                        id: patch.id,
+                        width: patch.width,
+                        height: patch.height,
+                        content: {
+                            width: patch.width,
+                            height: patch.height
+                        }
+                    });
+                }
+            });
+        }
+
+        if (!pageId) return;
+
+        saveViewport(pageId, centeredViewport.x, centeredViewport.y, 1);
+        fetch(`${API_BASE_URL}/api/pages/${pageId}/viewport`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                viewport_x: centeredViewport.x,
+                viewport_y: centeredViewport.y,
+                viewport_scale: 1
+            })
+        }).catch((err) => console.error('Failed to reset viewport', err));
+    }, [getCenteredViewport, pageId, saveToHistory, socket]);
+
+    const handleCreateGrid = async (rows: number, columns: number) => {
         if (selectedIds.length < 2) return;
+        if (rows < 1 || columns < 1) return;
         saveToHistory();
 
         const selectedElements = elements
             .filter(el => selectedIds.includes(el.id))
             .sort((a, b) => (a.y - b.y) || (a.x - b.x));
 
-        const columns = 5;
+        if (selectedElements.length > rows * columns) {
+            alert(`Grid ${columns}x${rows} is too small for ${selectedElements.length} items.`);
+            return;
+        }
+
         const spacing = 20;
 
         // Use the position of the first (top-leftmost) element as the anchor
@@ -1494,7 +1586,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 viewport_scale: stageScale
             })
         })
-            .then(() => alert('Viewport saved to server!'))
             .catch(err => console.error('Failed to save viewport', err));
     };
 
@@ -1553,6 +1644,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 onCreateGrid={handleCreateGrid}
                 onMoveSelectionToPage={handleMoveSelectionToPage}
                 onSaveView={handleSaveView}
+                onResetViewport={handleResetViewport}
                 onRatingFilterChange={setRatingFilter}
                 ratingFilter={ratingFilter}
             />

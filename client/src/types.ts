@@ -23,6 +23,8 @@ export interface Element {
     pageId?: string;
     rating?: number;
     sourceVideoUrl?: string;
+    originalWidth?: number;
+    originalHeight?: number;
 }
 
 export interface Project {
@@ -96,4 +98,11 @@ export interface ChatMessage {
     username: string;
     message: string;
     created_at: string;
+}
+
+export interface ConnectedChatUser {
+    email: string;
+    name: string;
+    picture?: string;
+    connectionCount: number;
 }

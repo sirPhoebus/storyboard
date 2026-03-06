@@ -3,6 +3,7 @@ import { Socket } from 'socket.io-client';
 import { API_BASE_URL } from '../config';
 import type { BatchTask } from '../types';
 import { Play, Trash2, Volume2, VolumeX, ChevronLeft, Hourglass, Download, ChevronRight, RefreshCw, FolderSearch } from 'lucide-react';
+import { fetchCachedJson, invalidateCache, readCachedData, setCachedData } from '../utils/queryCache';
 
 interface PromptMove {
     id: string;
@@ -30,9 +31,9 @@ const MAX_MULTI_PROMPT_IMAGES = 3;
 const MAX_MULTI_PROMPT_SHOTS = 6;
 
 const BatchPage: React.FC<BatchPageProps> = ({ socket, currentProjectId }) => {
-    const [tasks, setTasks] = useState<BatchTask[]>([]);
+    const [tasks, setTasks] = useState<BatchTask[]>(() => currentProjectId ? (readCachedData<BatchTask[]>(`batch:tasks:${currentProjectId}`) || []) : []);
     const [loading, setLoading] = useState(true);
-    const [prompts, setPrompts] = useState<PromptCategory[]>([]);
+    const [prompts, setPrompts] = useState<PromptCategory[]>(() => readCachedData<PromptCategory[]>('batch:prompts') || []);
     const [promptsPanelOpen, setPromptsPanelOpen] = useState(true);
     const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
     const [promptFocusTarget, setPromptFocusTarget] = useState<PromptFocusTarget | null>(null);
@@ -48,8 +49,21 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket, currentProjectId }) => {
             return;
         }
 
-        fetch(`${API_BASE_URL}/api/batch/tasks?projectId=${encodeURIComponent(currentProjectId)}`)
-            .then(res => res.json())
+        const tasksCacheKey = `batch:tasks:${currentProjectId}`;
+        const cachedTasks = readCachedData<BatchTask[]>(tasksCacheKey);
+        if (Array.isArray(cachedTasks)) {
+            setTasks(cachedTasks);
+            setLoading(false);
+        } else {
+            setLoading(true);
+        }
+
+        fetchCachedJson<BatchTask[]>(
+            tasksCacheKey,
+            `${API_BASE_URL}/api/batch/tasks?projectId=${encodeURIComponent(currentProjectId)}`,
+            undefined,
+            { ttlMs: 15_000 }
+        )
             .then(data => {
                 if (Array.isArray(data)) {
                     setTasks(data);
@@ -60,8 +74,12 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket, currentProjectId }) => {
             })
             .catch(err => console.error('Failed to fetch batch tasks:', err));
 
-        fetch(`${API_BASE_URL}/api/prompts`)
-            .then(res => res.json())
+        fetchCachedJson<PromptCategory[]>(
+            'batch:prompts',
+            `${API_BASE_URL}/api/prompts`,
+            undefined,
+            { ttlMs: 86_400_000 }
+        )
             .then(data => {
                 if (Array.isArray(data)) {
                     setPrompts(data);
@@ -80,17 +98,27 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket, currentProjectId }) => {
         if (socket) {
             socket.on('batch:add', (task: BatchTask) => {
                 if (task.project_id !== currentProjectId) return;
-                setTasks(prev => [task, ...prev]);
+                setTasks(prev => {
+                    const next = [task, ...prev.filter((item) => item.id !== task.id)];
+                    if (currentProjectId) setCachedData(`batch:tasks:${currentProjectId}`, next, 15_000);
+                    return next;
+                });
             });
             socket.on('batch:update', (task: BatchTask) => {
                 if (task.project_id !== currentProjectId) return;
                 setTasks(prev => {
                     const exists = prev.some(t => t.id === task.id);
-                    return exists ? prev.map(t => t.id === task.id ? task : t) : [task, ...prev];
+                    const next = exists ? prev.map(t => t.id === task.id ? task : t) : [task, ...prev];
+                    if (currentProjectId) setCachedData(`batch:tasks:${currentProjectId}`, next, 15_000);
+                    return next;
                 });
             });
             socket.on('batch:delete', (data: { id: string }) => {
-                setTasks(prev => prev.filter(t => t.id !== data.id));
+                setTasks(prev => {
+                    const next = prev.filter(t => t.id !== data.id);
+                    if (currentProjectId) setCachedData(`batch:tasks:${currentProjectId}`, next, 15_000);
+                    return next;
+                });
             });
             return () => {
                 socket.off('batch:add');
@@ -102,7 +130,11 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket, currentProjectId }) => {
 
     const handleUpdateTask = (id: string, updates: Partial<BatchTask>) => {
         // Optimistic update
-        setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
+        setTasks(prev => {
+            const next = prev.map(t => t.id === id ? { ...t, ...updates } : t);
+            if (currentProjectId) setCachedData(`batch:tasks:${currentProjectId}`, next, 15_000);
+            return next;
+        });
 
         fetch(`${API_BASE_URL}/api/batch/tasks/${id}`, {
             method: 'PATCH',
@@ -112,6 +144,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket, currentProjectId }) => {
     };
 
     const handleDeleteTask = (id: string) => {
+        if (currentProjectId) invalidateCache(`batch:tasks:${currentProjectId}`);
         fetch(`${API_BASE_URL}/api/batch/tasks/${id}`, { method: 'DELETE' });
     };
 
@@ -122,6 +155,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket, currentProjectId }) => {
 
         setIsDeletingAll(true);
         try {
+            if (currentProjectId) invalidateCache(`batch:tasks:${currentProjectId}`);
             await Promise.all(tasks.map(task =>
                 fetch(`${API_BASE_URL}/api/batch/tasks/${task.id}`, { method: 'DELETE' })
             ));
@@ -139,7 +173,11 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket, currentProjectId }) => {
             alert(data.error || 'Could not fetch video by task ID yet.');
             return;
         }
-        setTasks(prev => prev.map(t => t.id === id ? data : t));
+        setTasks(prev => {
+            const next = prev.map(t => t.id === id ? data : t);
+            if (currentProjectId) setCachedData(`batch:tasks:${currentProjectId}`, next, 15_000);
+            return next;
+        });
     };
 
     const handleGenerateAll = () => {
@@ -173,6 +211,7 @@ const BatchPage: React.FC<BatchPageProps> = ({ socket, currentProjectId }) => {
                 throw new Error(data.error || 'Failed to scan project video folder');
             }
             setScanStatus(`Scan complete: ${data.added || 0} added, ${data.updated || 0} updated.`);
+            if (currentProjectId) invalidateCache(`videos:${currentProjectId}`);
         } catch (err: any) {
             setScanStatus(err.message || 'Failed to scan project video folder.');
         } finally {
