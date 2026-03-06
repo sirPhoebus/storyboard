@@ -8,12 +8,14 @@ const SOCKET_URL_VAL = SOCKET_URL;
 
 export const useSocket = () => {
     const [socket, setSocket] = useState<Socket | null>(null);
+    const token = localStorage.getItem('auth_token');
 
     useEffect(() => {
         const s = io(SOCKET_URL_VAL, {
             reconnection: true,
             reconnectionDelay: 1000,
-            reconnectionAttempts: 5
+            reconnectionAttempts: 5,
+            auth: token ? { token } : undefined
         });
 
         s.on('connect', () => {
@@ -37,7 +39,7 @@ export const useSocket = () => {
         return () => {
             s.disconnect();
         };
-    }, []);
+    }, [token]);
 
     return socket;
 };

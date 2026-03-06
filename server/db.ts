@@ -54,6 +54,14 @@ db.exec(`
     negative_prompt TEXT,
     error TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS chat_messages (
+    id TEXT PRIMARY KEY,
+    user_email TEXT NOT NULL,
+    username TEXT NOT NULL,
+    message TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 try {

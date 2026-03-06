@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, X, Edit2, Check, HelpCircle } from 'lucide-react';
+import { Plus, X, Edit2, Check, HelpCircle, MessageCircle } from 'lucide-react';
 import type { Project } from '../types';
 
 interface ProjectTabsProps {
@@ -10,6 +10,9 @@ interface ProjectTabsProps {
     onRenameProject: (id: string, name: string) => void;
     onDeleteProject: (id: string) => void;
     onOpenHelp: () => void;
+    onOpenChat: () => void;
+    connectedUsers: number;
+    username: string;
 }
 
 export default function ProjectTabs({
@@ -19,7 +22,10 @@ export default function ProjectTabs({
     onCreateProject,
     onRenameProject,
     onDeleteProject,
-    onOpenHelp
+    onOpenHelp,
+    onOpenChat,
+    connectedUsers,
+    username
 }: ProjectTabsProps) {
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editName, setEditName] = useState('');
@@ -127,14 +133,22 @@ export default function ProjectTabs({
                 </button>
             </div>
 
-            <button
-                className="icon-btn"
-                onClick={onOpenHelp}
-                title="Help & Manual"
-                style={{ marginLeft: 'auto', marginRight: '16px', color: 'rgba(255,255,255,0.7)' }}
-            >
-                <HelpCircle size={20} />
-            </button>
+            <div style={{ marginLeft: 'auto', marginRight: '16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <span style={{ color: 'rgba(255,255,255,0.9)', fontSize: '13px' }}>{username}</span>
+                <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '13px' }}>({connectedUsers} users)</span>
+                <button className="icon-btn" onClick={onOpenChat} title="Chatroom">
+                    <MessageCircle size={18} />
+                    <span style={{ marginLeft: '6px', fontSize: '12px' }}>Chat</span>
+                </button>
+                <button
+                    className="icon-btn"
+                    onClick={onOpenHelp}
+                    title="Help & Manual"
+                    style={{ color: 'rgba(255,255,255,0.7)' }}
+                >
+                    <HelpCircle size={20} />
+                </button>
+            </div>
         </div>
     );
 }
