@@ -21,7 +21,6 @@ interface CanvasToolbarProps {
     onDownload: () => void;
     onCreateGrid: () => void;
     onMoveSelectionToPage: (targetPageId: string) => void;
-    onResetSize: (ids: string[]) => void;
     onSaveView: () => void;
     ratingFilter: number;
     onRatingFilterChange: (rating: number) => void;
@@ -46,8 +45,6 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
     onDownload,
     onCreateGrid,
     onMoveSelectionToPage,
-
-    onResetSize,
     onSaveView,
     ratingFilter,
     onRatingFilterChange
@@ -103,6 +100,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
     // Find primary selected element for style editing
     const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
     const selectedElement = selectedId ? elements.find(el => el.id === selectedId) : null;
+    const onResetSize = (_ids: string[]) => undefined;
 
     return (
         <div style={{ position: 'absolute', top: '20px', right: '20px', zIndex: 100, display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -169,7 +167,7 @@ export const CanvasToolbar: React.FC<CanvasToolbarProps> = ({
 
             <div style={separatorStyle} />
 
-            {(selectedIds.some(id => {
+            {false && (selectedIds.some(id => {
                 const el = elements.find(e => e.id === id);
                 return el?.type === 'image' || el?.type === 'video' || el?.type === 'video-card';
             })) && (

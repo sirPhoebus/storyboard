@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Stage, Layer, Transformer, Rect, Line as KonvaLine } from 'react-konva';
+import { Stage, Layer, FastLayer, Transformer, Rect, Line as KonvaLine } from 'react-konva';
 import Konva from 'konva';
 import { Socket } from 'socket.io-client';
 import CanvasItem from './canvas/CanvasItem';
@@ -57,6 +57,18 @@ const hasElementPatchChanges = (element: Element, patch: Partial<Element>) =>
         return currentValue !== value;
     });
 
+const isMediaElementType = (type: string) => type === 'image' || type === 'video' || type === 'video-card';
+
+const isElementInViewport = (
+    element: Element,
+    viewport: { left: number; top: number; right: number; bottom: number }
+) => !(
+    element.x > viewport.right ||
+    element.x + element.width < viewport.left ||
+    element.y > viewport.bottom ||
+    element.y + element.height < viewport.top
+);
+
 const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidth, chapters, allPages, onSelectPage, onOpenBatchManagement, socket, currentProjectId }) => {
 
 
@@ -113,6 +125,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     const [contextMenu, setContextMenu] = useState<{ x: number, y: number, elementId: string } | null>(null);
     const [middleMenuDisabledReason, setMiddleMenuDisabledReason] = useState<string | null>(null);
     const [videoModal, setVideoModal] = useState<{ url: string; title?: string } | null>(null);
+    const [imageModalId, setImageModalId] = useState<string | null>(null);
     const isMountedRef = useRef(true);
     const uploadCleanupTimersRef = useRef<number[]>([]);
     const gridSize = 20;
@@ -296,6 +309,10 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
     useEffect(() => {
         if (transformerRef.current) {
             const selectedNodes = selectedIds
+                .filter(id => {
+                    const element = elementsRef.current.find(el => el.id === id);
+                    return element ? !isMediaElementType(element.type) : false;
+                })
                 .map(id => elementRefs.current[id])
                 .filter(Boolean);
             transformerRef.current.nodes(selectedNodes);
@@ -703,7 +720,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                     y: finalY
                 });
             }
-        } else {
+        } else if (!isMediaElementType(element.type)) {
             const newWidth = Math.max(5, node.width() * scaleX);
             const newHeight = Math.max(5, node.height() * scaleY);
 
@@ -716,6 +733,18 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                     id,
                     width: newWidth,
                     height: newHeight,
+                    x: finalX,
+                    y: finalY
+                });
+            }
+        } else {
+            setElements(prev => prev.map(el =>
+                el.id === id ? { ...el, x: finalX, y: finalY } : el
+            ));
+
+            if (socket) {
+                socket.emit('element:update', {
+                    id,
                     x: finalX,
                     y: finalY
                 });
@@ -737,9 +766,16 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         }
     }, []);
 
-    const handleDblClick = useCallback((id: string, text: string) => {
-        setEditingId(id);
-        setEditText(text);
+    const handleDblClick = useCallback((element: Element) => {
+        if (element.type === 'text') {
+            setEditingId(element.id);
+            setEditText(element.text || '');
+            return;
+        }
+
+        if (element.type === 'image') {
+            setImageModalId(element.id);
+        }
     }, []);
 
     const handleContextMenu = useCallback(async (e: Konva.KonvaEventObject<PointerEvent>, id: string) => {
@@ -976,37 +1012,23 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                     img.src = fullUrl;
                     await new Promise((resolve, reject) => {
                         img.onload = () => {
-                            const ratio = img.width / img.height;
-                            const maxWidth = 533;
-                            if (ratio > 1) {
-                                finalWidth = maxWidth;
-                                finalHeight = Math.round(maxWidth / ratio);
-                            } else {
-                                finalHeight = maxWidth;
-                                finalWidth = Math.round(maxWidth * ratio);
-                            }
+                            finalWidth = img.width;
+                            finalHeight = img.height;
                             resolve(null);
                         };
                         img.onerror = () => reject(new Error('Failed to load image metadata'));
                     });
-                } else if (elementType === 'video') {
+                } else if (elementType === 'video' || elementType === 'video-card') {
                     const video = document.createElement('video');
                     video.preload = 'metadata'; // Explicitly hint to load metadata
-                    video.src = fullUrl;
+                    video.src = sourceVideoUrl ? (sourceVideoUrl.startsWith('http') ? sourceVideoUrl : `${API_BASE_URL}${sourceVideoUrl}`) : fullUrl;
                     await new Promise((resolve, reject) => {
                         const timeoutId = window.setTimeout(() => reject(new Error('Timeout loading video metadata')), 10000);
                         const clearVideoTimeout = () => window.clearTimeout(timeoutId);
                         video.onloadedmetadata = () => {
                             clearVideoTimeout();
-                            const ratio = video.videoWidth / video.videoHeight;
-                            const maxWidth = 533;
-                            if (ratio > 1) {
-                                finalWidth = maxWidth;
-                                finalHeight = Math.round(maxWidth / ratio);
-                            } else {
-                                finalHeight = maxWidth;
-                                finalWidth = Math.round(maxWidth * ratio);
-                            }
+                            finalWidth = video.videoWidth;
+                            finalHeight = video.videoHeight;
                             resolve(null);
                         };
                         video.onerror = () => {
@@ -1014,9 +1036,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                             reject(new Error('Failed to load video metadata'));
                         };
                     });
-                } else if (elementType === 'video-card') {
-                    finalWidth = 240;
-                    finalHeight = 184;
                 }
 
                 if (!finalWidth || !finalHeight) {
@@ -1257,12 +1276,29 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
         }
     };
 
+    const stageWidth = window.innerWidth - (isSidebarCollapsed ? 60 : sidebarWidth);
+    const stageHeight = window.innerHeight;
+    const viewportOverscan = 600;
+    const selectedIdsSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+    const editingElement = useMemo(
+        () => (editingId ? elements.find(el => el.id === editingId) || null : null),
+        [editingId, elements]
+    );
+    const viewportBounds = useMemo(() => {
+        const left = -stagePos.x / stageScale - viewportOverscan;
+        const top = -stagePos.y / stageScale - viewportOverscan;
+        const right = left + stageWidth / stageScale + viewportOverscan * 2;
+        const bottom = top + stageHeight / stageScale + viewportOverscan * 2;
+
+        return { left, top, right, bottom };
+    }, [stageHeight, stagePos.x, stagePos.y, stageScale, stageWidth]);
+
     const renderGrid = () => {
         if (!showGrid) return null;
 
         // Alternative: Efficient grid
-        const stageWidth = window.innerWidth / stageScale;
-        const stageHeight = window.innerHeight / stageScale;
+        const gridStageWidth = stageWidth / stageScale;
+        const gridStageHeight = stageHeight / stageScale;
         const xOffset = -stagePos.x / stageScale;
         const yOffset = -stagePos.y / stageScale;
 
@@ -1270,16 +1306,16 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
 
         // Vertical
         const startI = Math.floor(xOffset / gridSize) * gridSize;
-        for (let i = startI; i < startI + stageWidth + gridSize; i += gridSize) {
+        for (let i = startI; i < startI + gridStageWidth + gridSize; i += gridSize) {
             gridLines.push(
-                <KonvaLine key={`v${i}`} points={[i, yOffset, i, yOffset + stageHeight]} stroke="#333" strokeWidth={1} />
+                <KonvaLine key={`v${i}`} points={[i, yOffset, i, yOffset + gridStageHeight]} stroke="#333" strokeWidth={1} />
             );
         }
         // Horizontal
         const startJ = Math.floor(yOffset / gridSize) * gridSize;
-        for (let j = startJ; j < startJ + stageHeight + gridSize; j += gridSize) {
+        for (let j = startJ; j < startJ + gridStageHeight + gridSize; j += gridSize) {
             gridLines.push(
-                <KonvaLine key={`h${j}`} points={[xOffset, j, xOffset + stageWidth, j]} stroke="#333" strokeWidth={1} />
+                <KonvaLine key={`h${j}`} points={[xOffset, j, xOffset + gridStageWidth, j]} stroke="#333" strokeWidth={1} />
             );
         }
         return gridLines;
@@ -1293,6 +1329,63 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
             return (el.rating || 0) >= ratingFilter;
         });
     }, [elements, ratingFilter]);
+
+    const renderedElements = useMemo(() => {
+        return visibleElements.filter((el) => {
+            if (selectedIdsSet.has(el.id) || editingId === el.id) return true;
+            if (el.type === 'arrow') return true;
+            return isElementInViewport(el, viewportBounds);
+        });
+    }, [editingId, selectedIdsSet, viewportBounds, visibleElements]);
+
+    const imageModalItems = useMemo(
+        () => visibleElements.filter((el) => el.type === 'image' && el.url),
+        [visibleElements]
+    );
+    const imageModalIndex = useMemo(
+        () => imageModalItems.findIndex((el) => el.id === imageModalId),
+        [imageModalId, imageModalItems]
+    );
+    const imageModalItem = imageModalIndex >= 0 ? imageModalItems[imageModalIndex] : null;
+
+    const closeImageModal = useCallback(() => {
+        setImageModalId(null);
+    }, []);
+
+    const showPreviousImage = useCallback(() => {
+        if (imageModalItems.length === 0 || imageModalIndex < 0) return;
+        const nextIndex = (imageModalIndex - 1 + imageModalItems.length) % imageModalItems.length;
+        setImageModalId(imageModalItems[nextIndex].id);
+    }, [imageModalIndex, imageModalItems]);
+
+    const showNextImage = useCallback(() => {
+        if (imageModalItems.length === 0 || imageModalIndex < 0) return;
+        const nextIndex = (imageModalIndex + 1) % imageModalItems.length;
+        setImageModalId(imageModalItems[nextIndex].id);
+    }, [imageModalIndex, imageModalItems]);
+
+    useEffect(() => {
+        if (!imageModalItem) return;
+
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                closeImageModal();
+            } else if (event.key === 'ArrowLeft') {
+                showPreviousImage();
+            } else if (event.key === 'ArrowRight') {
+                showNextImage();
+            }
+        };
+
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [closeImageModal, imageModalItem, showNextImage, showPreviousImage]);
+
+    useEffect(() => {
+        if (imageModalId && !imageModalItem) {
+            setImageModalId(null);
+        }
+    }, [imageModalId, imageModalItem]);
 
     const handleUpdateStyle = useCallback((id: string, style: Partial<Element>) => {
         saveToHistory();
@@ -1386,36 +1479,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
 
 
 
-    const handleResetSize = (ids: string[]) => {
-        ids.forEach(id => {
-            let node = elementRefs.current[id];
-            if (!node) return;
-
-            // If it's a MultimediaElement, it's a Group with an _innerImage
-            if (node instanceof Konva.Group && (node as Konva.Group & { _innerImage?: Konva.Image })._innerImage) {
-                node = (node as Konva.Group & { _innerImage: Konva.Image })._innerImage;
-            }
-
-            if (!(node instanceof Konva.Image)) return;
-
-            const image = node.image();
-            if (image) {
-                let width, height;
-                if (image instanceof HTMLVideoElement) {
-                    width = image.videoWidth;
-                    height = image.videoHeight;
-                } else if (image instanceof HTMLImageElement) {
-                    width = image.naturalWidth;
-                    height = image.naturalHeight;
-                }
-
-                if (width && height) {
-                    handleUpdateStyle(id, { width, height });
-                }
-            }
-        });
-    };
-
     const handleSaveView = () => {
         if (!pageId) return;
 
@@ -1489,7 +1552,6 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                 onDownload={handleDownload}
                 onCreateGrid={handleCreateGrid}
                 onMoveSelectionToPage={handleMoveSelectionToPage}
-                onResetSize={handleResetSize}
                 onSaveView={handleSaveView}
                 onRatingFilterChange={setRatingFilter}
                 ratingFilter={ratingFilter}
@@ -1566,8 +1628,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                         }}
                         style={{
                             position: 'absolute',
-                            top: ((elements.find(el => el.id === editingId)?.y || 0) * stageScale + stagePos.y - 7) + 'px',
-                            left: ((elements.find(el => el.id === editingId)?.x || 0) * stageScale + stagePos.x - 7) + 'px',
+                            top: ((editingElement?.y || 0) * stageScale + stagePos.y - 7) + 'px',
+                            left: ((editingElement?.x || 0) * stageScale + stagePos.x - 7) + 'px',
                             minWidth: '200px',
                             minHeight: '50px',
                             width: 'auto',
@@ -1577,7 +1639,7 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                             outline: 'none',
                             padding: '5px',
                             margin: '0',
-                            fontSize: ((elements.find(el => el.id === editingId)?.fontSize || 16) * stageScale) + 'px',
+                            fontSize: ((editingElement?.fontSize || 16) * stageScale) + 'px',
                             fontFamily: 'sans-serif',
                             resize: 'both',
                             overflow: 'hidden',
@@ -1592,8 +1654,8 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
 
             <Stage
                 ref={stageRef}
-                width={window.innerWidth - (isSidebarCollapsed ? 60 : sidebarWidth)}
-                height={window.innerHeight}
+                width={stageWidth}
+                height={stageHeight}
                 onMouseDown={handleStageMouseDown}
                 onMouseMove={handleStageMouseMove}
                 onMouseUp={handleStageMouseUp}
@@ -1611,13 +1673,15 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                     }
                 }}
             >
-                <Layer>
+                <FastLayer listening={false}>
                     {renderGrid()}
-                    {visibleElements.map((el: Element) => (
+                </FastLayer>
+                <Layer>
+                    {renderedElements.map((el: Element) => (
                         <CanvasItem
                             key={el.id}
                             element={el}
-                            isSelected={selectedIds.includes(el.id)}
+                            isSelected={selectedIdsSet.has(el.id)}
                             isEditing={editingId === el.id}
                             onRef={(node) => {
                                 if (elementRefs.current) {
@@ -1638,7 +1702,9 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                             onContextMenu={handleContextMenu}
                         />
                     ))}
+                </Layer>
 
+                <FastLayer listening={false}>
                     {selectionBox && (
                         <Rect
                             x={selectionBox.x}
@@ -1651,7 +1717,9 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                             listening={false}
                         />
                     )}
+                </FastLayer>
 
+                <Layer>
                     <Transformer
                         ref={transformerRef}
                         boundBoxFunc={(oldBox, newBox) => {
@@ -1713,6 +1781,121 @@ const Canvas: React.FC<CanvasProps> = ({ pageId, isSidebarCollapsed, sidebarWidt
                                 <source src={videoModal.url.startsWith('http') ? videoModal.url : `${API_BASE_URL}${videoModal.url}`} type="video/mp4" />
                             </video>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {imageModalItem && (
+                <div
+                    onClick={closeImageModal}
+                    style={{
+                        position: 'absolute',
+                        inset: 0,
+                        zIndex: 2450,
+                        background: 'rgba(2, 6, 23, 0.78)',
+                        backdropFilter: 'blur(8px)',
+                        display: 'grid',
+                        placeItems: 'center',
+                        padding: '28px'
+                    }}
+                >
+                    <button
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            showPreviousImage();
+                        }}
+                        style={{
+                            position: 'absolute',
+                            left: '24px',
+                            top: '50%',
+                            transform: 'translateY(-50%)',
+                            width: '56px',
+                            height: '56px',
+                            borderRadius: '999px',
+                            border: '1px solid rgba(148, 163, 184, 0.24)',
+                            background: 'rgba(15, 23, 42, 0.72)',
+                            color: '#e2e8f0',
+                            fontSize: '28px',
+                            cursor: 'pointer'
+                        }}
+                        title="Previous image"
+                    >
+                        ‹
+                    </button>
+                    <button
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            showNextImage();
+                        }}
+                        style={{
+                            position: 'absolute',
+                            right: '24px',
+                            top: '50%',
+                            transform: 'translateY(-50%)',
+                            width: '56px',
+                            height: '56px',
+                            borderRadius: '999px',
+                            border: '1px solid rgba(148, 163, 184, 0.24)',
+                            background: 'rgba(15, 23, 42, 0.72)',
+                            color: '#e2e8f0',
+                            fontSize: '28px',
+                            cursor: 'pointer'
+                        }}
+                        title="Next image"
+                    >
+                        ›
+                    </button>
+                    <div
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                            width: 'min(92vw, 1600px)',
+                            maxHeight: '92vh',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '14px',
+                            alignItems: 'center'
+                        }}
+                    >
+                        <div
+                            style={{
+                                width: '100%',
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                color: '#e2e8f0'
+                            }}
+                        >
+                            <div style={{ minWidth: 0 }}>
+                                <div style={{ fontSize: '11px', color: '#7dd3fc', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '6px' }}>Image Viewer</div>
+                                <div style={{ fontSize: '14px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {imageModalItem.text || `Image ${imageModalIndex + 1}`}
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                                <div style={{ fontSize: '12px', color: '#94a3b8' }}>
+                                    {imageModalIndex + 1} / {imageModalItems.length}
+                                </div>
+                                <button
+                                    onClick={closeImageModal}
+                                    style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: '18px' }}
+                                >
+                                    x
+                                </button>
+                            </div>
+                        </div>
+                        <img
+                            src={(imageModalItem.url || '').startsWith('http') ? (imageModalItem.url || '') : `${API_BASE_URL}${imageModalItem.url || ''}`}
+                            alt={imageModalItem.text || 'Canvas image'}
+                            style={{
+                                maxWidth: '100%',
+                                maxHeight: 'calc(92vh - 56px)',
+                                objectFit: 'contain',
+                                display: 'block',
+                                borderRadius: '18px',
+                                boxShadow: '0 30px 80px rgba(0,0,0,0.45)',
+                                background: '#020617'
+                            }}
+                        />
                     </div>
                 </div>
             )}

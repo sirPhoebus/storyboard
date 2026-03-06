@@ -19,6 +19,7 @@ interface MultimediaElementProps {
     onTransformEnd?: (e: Konva.KonvaEventObject<Event>) => void;
     isSelected?: boolean;
     onClick?: (e: Konva.KonvaEventObject<MouseEvent>) => void;
+    onDblClick?: (e: Konva.KonvaEventObject<MouseEvent>) => void;
     onContextMenu?: (e: Konva.KonvaEventObject<PointerEvent>) => void;
     // Video controls
     isPlaying?: boolean;
@@ -46,6 +47,7 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
     onTransformEnd,
     isSelected,
     onClick,
+    onDblClick,
     onContextMenu,
     isPlaying = false,  // Changed: videos don't autoplay by default
     isMuted = true,
@@ -211,6 +213,7 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
             onDragEnd={onDragEnd}
             onTransformEnd={onTransformEnd}
             onClick={onClick}
+            onDblClick={onDblClick}
             onContextMenu={onContextMenu}
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
@@ -236,6 +239,7 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
                         y={10}
                         width={width - 20}
                         height={height - 54}
+                        perfectDrawEnabled={false}
                     />
                     <Rect
                         x={10}
@@ -285,6 +289,8 @@ const MultimediaElement = forwardRef<Konva.Group, MultimediaElementProps>(({
                     height={height}
                     stroke={isSelected ? '#3498db' : undefined}
                     strokeWidth={isSelected ? 4 : 0}
+                    perfectDrawEnabled={false}
+                    shadowForStrokeEnabled={false}
                 />
             )}
             {isHovered && (

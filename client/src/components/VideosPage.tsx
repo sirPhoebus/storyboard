@@ -440,9 +440,17 @@ const VideosPage: React.FC<VideosPageProps> = ({ socket, currentProjectId, chapt
                         {videos.map((video) => {
                             const thumbnailUrl = video.thumbnail_url ? toAbsoluteUrl(video.thumbnail_url) : null;
                             return (
-                                <button
+                                <div
                                     key={video.id}
                                     onClick={(event) => handleCardClick(event, video)}
+                                    onKeyDown={(event) => {
+                                        if (event.key === 'Enter' || event.key === ' ') {
+                                            event.preventDefault();
+                                            handleCardClick(event as unknown as React.MouseEvent, video);
+                                        }
+                                    }}
+                                    role="button"
+                                    tabIndex={0}
                                     style={{
                                         background: selectedVideoIds.includes(video.id) ? 'rgba(14, 165, 233, 0.12)' : 'rgba(255,255,255,0.03)',
                                         border: selectedVideoIds.includes(video.id) ? '1px solid rgba(125, 211, 252, 0.5)' : '1px solid rgba(148, 163, 184, 0.18)',
@@ -524,7 +532,7 @@ const VideosPage: React.FC<VideosPageProps> = ({ socket, currentProjectId, chapt
                                             </button>
                                         </div>
                                     </div>
-                                </button>
+                                </div>
                             );
                         })}
                     </div>

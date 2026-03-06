@@ -1083,7 +1083,7 @@ app.post('/api/projects/:id/videos/scan', async (req: any, res: any) => {
     }
 });
 
-app.post('/api/projects/:id/videos/send-to-page', (req: any, res: any) => {
+app.post('/api/projects/:id/videos/send-to-page', async (req: any, res: any) => {
     const projectId = req.params.id;
     const { source, sourceId, pageId } = req.body as { source?: 'batch' | 'imported'; sourceId?: string; pageId?: string };
 
@@ -1095,6 +1095,7 @@ app.post('/api/projects/:id/videos/send-to-page', (req: any, res: any) => {
         let title = 'Video';
         let videoUrl = '';
         let thumbnailUrl: string | null = null;
+        let sourcePath = '';
 
         if (source === 'imported') {
             const row = db.prepare(`
@@ -1116,6 +1117,7 @@ app.post('/api/projects/:id/videos/send-to-page', (req: any, res: any) => {
             title = row.title;
             videoUrl = row.video_url;
             thumbnailUrl = row.thumbnail_url || null;
+            sourcePath = row.source_path;
         } else if (source === 'batch') {
             const row = db.prepare(`
                 SELECT id, prompt, generated_video_url
@@ -1138,6 +1140,7 @@ app.post('/api/projects/:id/videos/send-to-page', (req: any, res: any) => {
 
             title = row.prompt?.trim() || path.basename(row.generated_video_url);
             videoUrl = row.generated_video_url;
+            sourcePath = filePath;
         } else {
             return res.status(400).json({ error: 'Unsupported video source' });
         }
@@ -1152,8 +1155,12 @@ app.post('/api/projects/:id/videos/send-to-page', (req: any, res: any) => {
         const index = countResult.count;
         const x = 80 + (index % 4) * 280;
         const y = 80 + Math.floor(index / 4) * 220;
-        const width = 240;
-        const height = 184;
+        const dimensions = await getVideoDimensions(sourcePath);
+        if (!dimensions.width || !dimensions.height) {
+            return res.status(500).json({ error: 'Could not determine native video dimensions' });
+        }
+        const width = dimensions.width;
+        const height = dimensions.height;
         const id = crypto.randomUUID();
         const content = {
             url: thumbnailUrl || videoUrl,

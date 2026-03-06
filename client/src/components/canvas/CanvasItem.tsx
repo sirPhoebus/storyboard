@@ -24,7 +24,7 @@ interface CanvasItemProps {
     onDragEnd: (id: string, x: number, y: number) => void;
     onTransformEnd: (id: string, node: Konva.Node) => void;
     onClick: (e: Konva.KonvaEventObject<MouseEvent>, id: string) => void;
-    onDblClick?: (id: string, text: string) => void;
+    onDblClick?: (element: Element) => void;
     onArrowPointDrag?: (id: string, index: number, x: number, y: number) => void;
     onArrowPointDragEnd?: (id: string) => void;
     onPlayRequest?: (url: string, title?: string) => void;
@@ -55,6 +55,7 @@ const CanvasItem: React.FC<CanvasItemProps> = memo(({
     const handleDragEndWrapped = (e: Konva.KonvaEventObject<DragEvent>) => onDragEnd(el.id, e.target.x(), e.target.y());
     const handleTransformEndWrapped = (e: Konva.KonvaEventObject<Event>) => onTransformEnd(el.id, e.target as Konva.Node);
     const handleClick = (e: Konva.KonvaEventObject<MouseEvent>) => onClick(e, el.id);
+    const handleDblClick = () => onDblClick && onDblClick(el);
     const handleContextMenu = (e: Konva.KonvaEventObject<PointerEvent>) => onContextMenu && onContextMenu(e, el.id);
 
     if (el.type === 'rect') {
@@ -75,6 +76,8 @@ const CanvasItem: React.FC<CanvasItemProps> = memo(({
                 onDragEnd={handleDragEndWrapped}
                 onTransformEnd={handleTransformEndWrapped}
                 onContextMenu={handleContextMenu}
+                perfectDrawEnabled={false}
+                shadowForStrokeEnabled={false}
             />
         );
     }
@@ -94,9 +97,10 @@ const CanvasItem: React.FC<CanvasItemProps> = memo(({
                 onDragStart={handleDragStartWrapped}
                 onDragMove={handleDragMove}
                 onDragEnd={handleDragEndWrapped}
-                onDblClick={() => onDblClick && onDblClick(el.id, el.text || '')}
+                onDblClick={handleDblClick}
                 onTransformEnd={handleTransformEndWrapped}
                 onContextMenu={handleContextMenu}
+                perfectDrawEnabled={false}
             />
         );
     }
@@ -120,6 +124,8 @@ const CanvasItem: React.FC<CanvasItemProps> = memo(({
                     onDragEnd={handleDragEndWrapped}
                     onTransformEnd={handleTransformEndWrapped}
                     onContextMenu={handleContextMenu}
+                    perfectDrawEnabled={false}
+                    shadowForStrokeEnabled={false}
                 />
                 {isSelected && points.length >= 4 && onArrowPointDrag && onArrowPointDragEnd && (
                     <>
@@ -168,11 +174,11 @@ const CanvasItem: React.FC<CanvasItemProps> = memo(({
                 isSelected={isSelected}
                 draggable={!isEditing}
                 onClick={handleClick}
+                onDblClick={el.type === 'image' ? handleDblClick : undefined}
                 onUpdateElement={onUpdateElement}
                 onDragStart={handleDragStartWrapped}
                 onDragMove={handleDragMove}
                 onDragEnd={handleDragEndWrapped}
-                onTransformEnd={handleTransformEndWrapped}
                 onContextMenu={handleContextMenu}
                 // Pass props needed for video state
                 isPlaying={el.isPlaying}
